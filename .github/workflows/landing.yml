@@ -183,6 +183,13 @@ jobs:
 
           # Anything that is not there gets the site's own 404, which exists
           # only because the prerender writes one.
-          curl -sS "$site/nothing-here" | grep -q "A full-screen terminal UI for Docker"
+          #
+          # Downloaded before it is searched, never piped into grep: grep -q
+          # exits at the first match, curl finds the far end of the pipe shut
+          # with forty kilobytes still to write, and dies with "failure writing
+          # output to destination". Under pipefail that is the pipeline's
+          # status, so the step fails on a page that is perfectly correct.
+          curl -sS "$site/nothing-here" -o /tmp/404.html
+          grep -q "A full-screen terminal UI for Docker" /tmp/404.html
 
           echo "verified $site"
