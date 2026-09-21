@@ -28,34 +28,41 @@ body {
 
 /* A terminal frame is a fixed grid of characters: it cannot reflow, and cutting
    it off would hide the very columns being shown. So the type is sized to the
-   width the frame is given, from the number of columns it was captured at. */
-
-/* The window chrome is as wide as the frame inside it, never wider. The advance
-   width of a monospace character is not exactly the same in every font on the
-   stack, so a chrome of fixed width shows either a gap down its right edge or a
-   frame spilling out of it, depending on which font the reader has. Letting the
-   content decide the width makes both impossible. */
+   width the frame is given, and the whole capture is always visible: one
+   screenshot is one whole terminal, never a window onto part of one. */
 .terminal-window {
-  width: max-content;
-  max-width: 100%;
-  margin-inline: auto;
+  /* Fills the space it is given. It must not size itself to its content: the
+     frame inside asks the container how wide it is, and a container that asks
+     the content how wide it is has nothing to answer with. That circle is what
+     collapsed the frames to their smallest size and put a scrollbar under
+     them. */
+  width: 100%;
 }
 
 .terminal-fit {
   container-type: inline-size;
-  overflow-x: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-edge) transparent;
+  /* Nothing scrolls. Whatever the width, the type is sized so the capture
+     fits, so there is never anything to scroll to. */
+  overflow: hidden;
 }
 
 .terminal-fit pre {
-  /* Sized to the width it is given, between a floor and a ceiling. Without the
-     floor a 104-column frame comes out at five pixels on a phone, and below it
-     the frame scrolls sideways instead, which is the one case where scrolling
-     beats shrinking. The ceiling only stops the type growing absurd on a very
-     wide screen: set too low, as 13px was, the frame stops filling the space it
-     was given and sits small inside its own window.
-     0.605em is the advance width of a monospace character, near enough. */
-  font-size: clamp(9.5px, calc((100cqw - 1.5rem) / (var(--cols) * 0.605)), 19px);
+  /* cqw is the container's content box, so the padding is already out of it
+     and must not be subtracted again.
+
+     0.6em is the advance width of a monospace character in nearly every font
+     on the stack. Where it is narrower, as Consolas is, the frame comes out a
+     little short of the full width, and centring it turns that into even
+     margins rather than a gap down one side.
+
+     No ceiling: a ceiling is what made a frame stop growing and sit small
+     inside its own window. The container is at most the width of the page, so
+     the type cannot run away.
+
+     No floor either: a floor is a width below which the frame stops shrinking
+     and is then wider than the box that holds it, which clips it. A capture
+     that fits always is worth more on a phone than a legible fragment of one. */
+  font-size: calc(100cqw / (var(--cols) * 0.6));
   width: max-content;
+  margin-inline: auto;
 }

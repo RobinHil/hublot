@@ -4,6 +4,9 @@ A full-screen terminal UI for Docker: live per-container resource usage,
 keyboard-driven navigation into every object the daemon manages, and every
 action available without leaving the terminal.
 
+**[robinhil.github.io/hublot](https://robinhil.github.io/hublot/)** shows what
+it looks like, in real frames rather than pictures of them.
+
 Two things set it apart from the tools next to it:
 
 - **Disk hygiene.** The Docker API has no dry run, so prune endpoints delete
