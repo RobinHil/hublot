@@ -30,15 +30,50 @@ usage, live CPU/memory/network/block IO stats, every action the Engine API
 exposes for those objects, log streaming, shell exec, inspect, granular and global
 pruning with previews, multi-selection and filtering.
 
+Things are created here as well as managed: a container from a form that asks
+what `docker run` takes and nothing more, a volume or a network from a prompt,
+an image pulled by name, and a stack brought up from a compose file that
+nothing has been created from yet. Anything more elaborate than that form
+belongs in a compose file, which is the point of the compose view.
+
+What an editing session did is decided by the file's contents before and after,
+never by how the editor exited: quitting with `:q` has to change nothing and
+say so, `:wq` with no edits is not a change either, and a stack created for the
+occasion is taken back out when nothing was written, starter file and directory
+included, touching nothing that was already there. An editor that exits
+non-zero is not an error worth a dialog; one that could not be run at all is.
+
+Files are edited in a real editor rather than in a text box hublot would have
+to grow: `internal/editor` finds one, the app suspends the interface the same
+way it does for a shell, and what happens afterwards is the caller's business,
+which for a compose file is offering to apply it. The choice is asked once and
+written to the configuration, and it comes from `editor` there, then `$VISUAL`
+and `$EDITOR`, then a list of what is installed, terminal editors first. An
+editor that opens a window is given the flag that makes it wait, or hublot
+would return before anything had been typed.
+
+Compose actions apply to the row under the cursor. Each project is a row of its
+own above its services, drawn across the width, and that is the row that means
+the whole stack: `l`, `u`, `S` and `R` on it act on everything, on a service
+line they act on that service. `enter` folds a stack and works only from the
+project line, because folding from a service moves that service out from under
+the cursor and reads as the list jumping about. `L` is the whole stack's logs
+from anywhere. This is the one rule in that view worth learning, so the help
+overlay states it.
+
 The coverage of those objects is meant to be complete, and the `x` palette is
 where everything without a dedicated key lives. Containers:
-start, stop, restart, pause, unpause, kill with a signal, remove, rename,
-update cpu and memory limits, logs, exec, inspect, processes, filesystem
-changes, commit, export, copy files in and out, connect and disconnect
-networks. Images: list, inspect, history, pull, tag, untag, save, load, remove.
-Volumes: create, list, inspect, remove. Networks: create, list, inspect,
-connect, disconnect, remove. System: info, version, events, df, prune per
-category.
+create and run, start, stop, restart, pause, unpause, kill with a signal,
+remove, rename, update cpu and memory limits, logs, exec, inspect, processes,
+filesystem changes, commit, export, copy files in and out, connect and
+disconnect networks. Images: list, inspect, history, pull by name or again, run
+a container from one, tag, untag, save, load, remove. Volumes: create, list,
+inspect, remove. Networks: create, list, inspect, connect, disconnect, remove.
+Compose: up, down, stop, restart, pull, build, scale, config, drift, logs,
+reading the compose file, and starting a stack from a file on disk. Reading it
+is its own key: answering "what does this stack actually say" by opening an
+editor is how a file gets changed by accident. System: info, version, events, df, prune
+per category.
 
 Out of scope, deliberately:
 
@@ -54,10 +89,9 @@ Out of scope, deliberately:
 - Kubernetes.
 - Any web UI, HTTP server, or telemetry.
 - Swarm, services, nodes, tasks, secrets, configs and plugins; image build and
-  push, registry login and search; checkpoints; and creating containers, which
-  is what a compose file or a run command is for. `attach` is not offered
-  either: `exec` covers what it is used for without the risk of sending a
-  signal to PID 1.
+  push, registry login and search; checkpoints. `attach` is not offered either:
+  `exec` covers what it is used for without the risk of sending a signal to
+  PID 1, and `wait` has no meaning in a view that already shows state.
 
 Target platforms: Linux and macOS. Windows is not supported.
 
@@ -65,7 +99,7 @@ Target platforms: Linux and macOS. Windows is not supported.
 
 | Concern | Choice |
 |---|---|
-| Language | Go 1.22+ |
+| Language | Go, at the version `go.mod` pins |
 | TUI | `github.com/charmbracelet/bubbletea` |
 | Styling | `github.com/charmbracelet/lipgloss` |
 | Widgets | `github.com/charmbracelet/bubbles` (viewport, textinput, spinner, help, key) |
@@ -77,10 +111,18 @@ Do not add dependencies beyond these without a stated reason. In particular, do
 dependency tree and pins us to a Compose version. Compose actions shell out to the
 `docker compose` binary instead (section 8).
 
-One addition beyond the table, with its reason: `github.com/charmbracelet/x/term`,
+Two additions beyond the table, with their reasons. `github.com/charmbracelet/x/term`,
 used by `internal/docker/exec.go` for raw mode, terminal size and restore. Bubble
 Tea already pulls it in, so it costs nothing in the dependency tree, and the
 alternative was a second terminal library for three calls.
+
+`github.com/docker/go-connections/nat`, used by `internal/docker/run.go` to
+parse the port specifications a container is created with. It is the Docker
+SDK's own parser, already in the tree because the SDK depends on it, and
+writing a second one would mean reimplementing `8080:80/tcp`, ranges and
+interface prefixes from scratch. `go mod tidy` promotes it to a direct
+dependency; leave it there, and run `go mod tidy` before pushing, because CI
+fails on a go.mod that is not tidy.
 
 ## 4. Architecture
 
@@ -92,6 +134,19 @@ internal/compose/  Compose model and CLI runner. Knows nothing about the UI.
 internal/state/    Pure data types and reducers. No IO, no Docker, no UI.
 internal/ui/       Bubble Tea. Talks to the layers above only through messages.
 ```
+
+### Rule 0: nothing drawn comes out of a map
+
+A map has no order, and Go deliberately varies it between calls. A list built
+by ranging over one reorders itself on every refresh, which is once a second:
+the text under the cursor changes while nothing about the host has. The
+networks view did this with its attached containers, and it read as a list that
+would not sit still.
+
+Anything a domain type exposes as a map gets a method that returns it in a
+decided order, `Network.Attached` being the pattern, and the views call that
+instead of ranging over the map themselves. Sums over a map are fine; sequences
+are not.
 
 ### Rule 1: the UI never sees a Docker SDK type
 
@@ -140,40 +195,52 @@ hublot/
   cmd/hublot/main.go          flag parsing, client init, tea.NewProgram
   internal/
     docker/
-      client.go               connection, ping, API version negotiation
+      client.go               connection, socket resolution, API negotiation
+      permission.go           what a refused socket means, and what to do
       types.go                our domain types
-      containers.go           list, inspect, start, stop, restart, pause,
-                              unpause, kill, rm, rename, update
-      images.go               list, inspect, history, rm, tag, untag, pull, save
-      volumes.go              list, inspect, rm, usage
-      networks.go             list, inspect, rm, connect, disconnect
+      containers.go           every container action, plus top/diff/commit/export
+      images.go               list, inspect, history, rm, tag, untag, pull, save, load
+      volumes.go              list, inspect, create, rm, usage
+      networks.go             list, inspect, create, rm, connect, disconnect
+      run.go                  creating and starting a container from a spec
+      copy.go                 docker cp both ways, with the escape checks
       system.go               df, version, info, prune per category
       events.go               event stream with backoff reconnection
       stats.go                per-container stats stream, CPU/mem computation
       logs.go                 log stream with stdcopy demultiplexing
-      exec.go                 interactive exec session
+      exec.go                 interactive exec session, on its own screen
     compose/
       labels.go               rebuild project tree from container labels
       cli.go                  binary detection, argument construction
       runner.go               command execution with streamed output
       drift.go                config-hash comparison
+    editor/editor.go          finding an editor, and how to wait for it
     state/
       store.go                the model's data, reducers, sorting, filtering
       prune.go                prune preview computation
+      parse.go                parsing what people type: sizes, paths, mounts
+      diagnose.go             explaining the failures that keep happening
     ui/
-      app.go                  root model, tab routing, global keys
+      app.go                  root model, message routing, global keys
+      app_actions.go          what each request does
+      app_view.go             the frame, the dashboard, the hints
+      layout.go               how the screen is divided, and nowhere else
       stream.go               waitFor and friends
+      cmds/                   every Docker call, as tea.Cmd
       keys/keys.go            all key.Binding definitions, centralized
       theme/theme.go          colors and styles, one place only
       components/
         table.go              generic sortable/filterable/selectable table
-        modal.go              confirmation dialogs
-        statusbar.go
-        help.go
-        sparkline.go
+        panel.go              the side panel: logs, inspect, text
+        modal.go              dialogs, graded by severity
+        form.go prompt.go picker.go
+        header.go statusbar.go help.go sparkline.go
+        sanitize.go           the single choke point for untrusted text
         tasks.go              long-running command output panel
       views/
-        containers.go images.go volumes.go networks.go compose.go disk.go logs.go
+        containers.go compose.go images.go volumes.go networks.go disk.go
+        run.go                the container creation form
+        view.go               the View interface and the requests it sends
     config/config.go          ~/.config/hublot/config.yaml
 ```
 
@@ -249,6 +316,31 @@ Exec requires suspending Bubble Tea, putting the terminal in raw mode, wiring th
 hijacked connection to stdin/stdout, and restoring cleanly on exit, including on
 panic. Handle resize with `ContainerExecResize`. Prefer `tea.ExecProcess` where it
 fits. Test "exit while output is still flowing".
+
+The session gets the alternate buffer to itself. Bubble Tea hands the terminal
+back as it found it before an exec, so without this the shell opens underneath
+the scrollback of whatever ran there before hublot started, and leaves its own
+behind on the way out. `ownScreen` switches to the alternate buffer, clears it,
+prints one dim line naming the container, and switches back afterwards: nothing
+outside the session is touched, scrollback included. The order to check when
+this breaks is `1049l` from Bubble Tea, `1049h` ours, `1049l` ours, `1049h`
+from Bubble Tea.
+
+A shell inside the side panel is possible, and is not done on purpose rather
+than because it cannot be. It needs a terminal emulator in the panel: full
+escape parsing, cursor addressing, scroll regions, and its own alternate buffer
+for whatever the user runs in there. `github.com/charmbracelet/x/vt` does that
+and comes from the same family as what is already here, at the cost of eight
+new modules, `charmbracelet/ultraviolet` among them, on an untagged
+pseudo-version.
+
+The rest is not the library: every keystroke has to reach the shell, including
+the ones Bubble Tea and hublot use themselves, with a way back out; the remote
+pty has to follow a pane the user can drag; and the panel repaints on every
+byte the shell writes. Against that, a shell in a third of a 150 column
+terminal is fifty columns, which is not where anyone wants to run `vim` or
+`top`. Full screen on its own buffer is both cheaper and better. Revisit only
+if someone asks for it knowing that.
 
 ### 6.8 SDK package layout
 
@@ -368,7 +460,7 @@ with the normal log view.
 Full-screen tabs, not side-by-side panes. Stats tables need the width.
 
 ```
-| Containers  Images  Volumes  Networks  Compose  Disk ---- local - 24 ctr |
+| Containers  Compose  Images  Volumes  Networks  Disk ---- local - 24 ctr |
 | filter: running                                                          |
 | > NAME         IMAGE         CPU     MEM        NET I/O   STATUS  PORTS  |
 |   nginx-proxy  nginx:alpine  ## 12%  ... 45MB   1.2/0.8M  Up 3d   :80    |
@@ -386,12 +478,81 @@ Handle `tea.WindowSizeMsg` properly from the start. Minimum usable width: 80
 columns; below that show a message rather than rendering garbage.
 
 The frame fills the terminal exactly, like a window: the status bar on the first
-line, the key hints on the last, the pane stretched to fill everything between,
-and the message line always reserved so the pane does not resize under the
-cursor when a message appears or expires. `App.frame` places those rows and pads
-or cuts the pane to the remaining height; `App.layout` hands each view the same
-arithmetic, and a view that prints a header of its own above its table (the disk
-view does) subtracts it in `SetSize`.
+line, the key hints on the last, everything else stretched between them. One
+place decides all of it, `internal/ui/layout.go`, and both the renderer and the
+sizing read it rather than each doing the arithmetic. It is pure and tested: a
+screen too small is refused with a message, the message line goes at 13 rows,
+the tab bar at 11, and under 72 columns the labels shorten.
+
+The head of the screen is a dashboard, not a title bar. Two rows when there is
+room: what the session is and what the active view adds up to, then the two
+figures that matter with their history and the host broken down into coloured
+dots. One row when there is not. The history graphs are plotted against a fixed
+ceiling, not against their own maximum: a machine doing nothing has to read as
+doing nothing, and a graph rescaled to its own noise reads as load. Per-row
+sparklines do the same through a flatness guard.
+
+Every view answers `Summary()` with the one line it adds to that header: what
+its list amounts to, so nobody has to count rows. Those lines complement the
+header rather than repeating it, and no fact appears twice on one screen.
+
+The hint bar names what the row under the cursor actually needs: `P` reads
+"unpause" in front of a paused container and "pause" in front of a running one.
+A paused container cannot be started, only unpaused, and a bar offering the
+wrong half of a toggle is worse than one offering nothing.
+
+Selecting rows is the one thing in a list that does nothing visible on its own,
+so the interface explains it the first time it happens, the selected rows carry
+a bar in the margin, and the word everywhere is "select", never "mark".
+
+Reading happens in a side panel, not instead of the list: logs, inspect output,
+process lists and resolved configuration open beside what they are about.
+Beside becomes below under 96 columns, and takes the screen when neither half
+would be worth reading. `ctrl+w` moves the focus, `W` cycles the share, and the
+divider between the two is dragged with the mouse: the share is a percentage,
+not one of four fractions, so the key cycles the useful stops and the mouse
+lands wherever it likes. A drag stops short of full, because a divider dragged
+off the edge cannot be dragged back. The panel owns its own search and follow,
+so the list keys never fight with it.
+
+Graphics shrink before figures do. The containers view picks a tier from its
+width in `tierFor`: meter and sparkline, then a narrower meter, then numbers
+alone. A cut number is a bug; a missing picture is a choice.
+
+The wheel moves the window, not the cursor. Moving the cursor instead is why a
+long list used to sit still and then jump: nothing happened until the cursor
+reached an edge. The cursor follows only when the window would leave it behind,
+and on a list short enough to fit, where there is no window to move, the wheel
+moves the selection instead: a wheel that does nothing reads as a broken one.
+
+The cursor itself keeps `scrollMargin` rows of context ahead of it, so the list
+starts moving before the cursor reaches the edge. Without it the movement all
+happens in the last few rows, which is what reads as a list that lurches.
+The same goes for text: the side panel and the task panel keep their offset
+while output arrives, and follow the newest line only when they are already at
+the end, which scrolling away turns off and scrolling back on. Both buffers are
+windows on a stream, so once full, a line arriving drops one from the front and
+every row shifts up by one. The offset is corrected by the rows dropped, or the
+text being read creeps upward exactly when the output is busy enough to matter.
+
+Laying a buffer out costs a pass over every line in it, and a container can
+print faster than the screen refreshes. Appending marks the panel dirty and
+nothing else; `sync` lays it out once, before something is drawn or a key is
+handled. Done per line it is quadratic: ten thousand lines through a five
+thousand line buffer took tens of seconds, which is what a "sluggish" panel
+actually was.
+
+Wrapped lines are indented by their continuation. Without it a line carrying on
+looks exactly like the next one, and scrolling lands on half a sentence with
+nothing saying it is half a sentence. Searching has to count rows rather than
+lines for the same reason: `rowOf` maps a line to the row it starts on, and a
+match found by line number lands further off the more the buffer wraps.
+
+`Row.Full` is a row drawn across the whole width instead of into columns: a
+heading the cursor can land on. The Compose view uses it for the project line.
+Selected, it is stripped before it is painted, for the same reason a selected
+row drops its per-cell colours: a colour left inside resets the background and
+the band stops at the first one.
 
 The table budgets lines rather than counting rows: a group heading takes a line
 like a row does, so `rowsFitting` decides the window and `View` renders exactly
@@ -404,6 +565,10 @@ sequences that plain rune slicing both miscounts and splits.
 Convention, applied consistently: **lowercase is safe, uppercase is destructive or
 forced.** All bindings live in `internal/ui/keys`, never inline in views, so the
 help overlay is generated from the same source.
+
+The tabs run Containers, Compose, Images, Volumes, Networks, Disk: stacks are
+how hosts are run, so they come before the loose objects underneath them. The
+digit keys follow that order and nothing else depends on it.
 
 Global: `1`-`6` / `tab` / `shift+tab` / left and right arrows switch view (no
 table scrolls sideways, so the horizontal arrows are free), `/` filter, `s` cycle sort,
@@ -419,8 +584,10 @@ The `x` palette is the escape valve: anything too rare for a dedicated key
 searchable by typing.
 
 Compose: `u` / `U` up -d / up -d --force-recreate, `p` / `b` pull / build, `S` /
-`R` stop / restart stack, `l` aggregated logs, `+` / `-` scale selected service,
-`c` show resolved config, `D` down, `X` down -v --remove-orphans.
+`R` stop / restart stack, `l` logs of the row, `L` logs of the stack, `+` / `-`
+scale selected service, `v` read the compose file, `E` edit it, `c` show
+resolved config, `d` check drift, `n` a new or existing stack, `enter` fold,
+`D` down, `X` down -v --remove-orphans.
 
 ### 9.3 Task panel
 
@@ -480,6 +647,27 @@ A `--read-only` flag disables every mutating action, greys out the corresponding
 keys, and shows a badge in the status bar. This makes `hublot` safe to open on a
 server just to look.
 
+The refusal lives where the change would happen, not only in the view that asked
+for it: `runCompose` and `openEditor` check it themselves. A guard in every
+caller holds only as long as every caller remembers, and the dialog that offers
+to fix a compose file after a failure was a caller added later that did not.
+Anything new that mutates gets the check at its own choke point.
+
+## 10.5 Untrusted text
+
+Everything the daemon reports is untrusted input, and most of it is written by
+whatever runs inside a container: log lines above all, but also names, labels,
+image references and error messages. Drawn as they arrive, they can move the
+cursor, clear the screen, redraw the interface to say something untrue, set the
+window title, or reach the clipboard through OSC.
+
+`components.Sanitize` is the single choke point, and everything drawn goes
+through it: the table sanitises in `pad`, the panel on append, the status bar on
+the message line. Colour survives, because an SGR sequence cannot address the
+terminal; every other escape, and the C0 and C1 controls, do not. Tabs become
+spaces so no column can be pushed out of alignment. The tests name the attack
+each case prevents.
+
 ## 11. Access, and who may use hublot
 
 hublot enforces nothing of its own. The socket's mode is the access control,
@@ -506,6 +694,41 @@ away from the lookups, so each branch is tested without a socket.
 - A failed action surfaces the daemon's own error message in a modal. Docker's
   errors are usually informative; do not swallow or rewrite them.
 - Never `panic` in a `tea.Cmd`: recover and turn it into an error message.
+
+### 12.1 Diagnosing the common failures
+
+Docker's errors are accurate and written for someone who already knows what went
+wrong. `driver failed programming external connectivity on endpoint x (64 hex
+characters): Bind for 0.0.0.0:8080 failed: port is already allocated` means "that
+port is taken", and nothing in it says so.
+
+`internal/state/diagnose.go` recognises the handful of failures that account for
+most of them: a host port already bound, a container name already used, an image
+that cannot be pulled, a compose variable with no value, a port below 1024, a
+full disk. It adds a title and a paragraph saying what to do, and the daemon's
+own message stays on screen underneath, never replaced.
+
+Rules:
+
+- It returns false when it recognises nothing. An invented explanation is worse
+  than none, so the raw message is shown alone.
+- The port case is enriched in the UI with `state.PortHolder`, which names the
+  container currently publishing that port. hublot is already looking at every
+  container on the host, and this is the answer the user was about to go and
+  find by hand.
+- Parse the port from an address (`0.0.0.0:8080`, `[::]:8080`, `:::8080`), never
+  as "the first number in the message". These errors carry container ids, and
+  `starting container 14dde66ee0cc` yields a very convincing `14`.
+- New patterns get a test built from a message captured from a real daemon, not
+  from one written from memory. Compose and the engine word the same failure
+  differently, and both wordings have to match.
+
+A dialog that can do something about the failure does it rather than describing
+it. `Modal.Action` is that offer, taken with `e`, and a compose file that will
+not parse is the case it was built for: compose names the file, or the project
+was built from one, and either way it is a keypress from the editor. What
+happens after the write is asked for, never assumed, because the command being
+retried can be `down -v`.
 
 ## 13. Testing
 
@@ -545,6 +768,11 @@ Do not build views before the data layer is solid.
 - Standard Go layout, `internal/` for everything not meant to be imported.
 - Errors wrapped with `%w` and context; no bare `err` returns across layers.
 - No global variables except the theme.
+- A path typed into the interface goes through `state.HomePath`. The shell
+  expands `~` and `$VARIABLES` before a program sees its arguments, and a text
+  field inside a program gets none of that: left alone, `~/stacks/blog` creates
+  a directory actually named `~` wherever hublot happens to be running. Every
+  prompt that takes a path does this, not only the compose ones.
 - Comments explain why, not what. The traps in section 6 deserve comments pointing
   back to this file.
 - `gofmt`, `go vet`, `golangci-lint` clean.
@@ -572,7 +800,11 @@ driven from the `Makefile` so a release is one command:
   `packaging/nfpm.yaml` via `nfpm pkg`. Keep the two in sync by construction;
   never hand-write a spec file or a `DEBIAN/control`.
 - **Arch `PKGBUILD`** in `packaging/aur/`, building from the released source
-  tarball, with `sha256sums` updated per release.
+  tarball, with `sha256sums` updated per release. `make arch` builds it against
+  the working tree instead, uncommitted and untracked files included, since the
+  point of building locally is to install what is on disk rather than the last
+  release. Only `pkgver` and the `source=` line differ from the published
+  recipe, exactly as in CI.
 - **AppImage** in `packaging/appimage/`: an `AppDir` (desktop file, icon,
   `AppRun`) assembled by the Makefile and sealed with `appimagetool`. `hublot` is
   a terminal program, so the desktop entry sets `Terminal=true`; the AppImage
@@ -641,13 +873,16 @@ Makefile normalises them; the binary still reports the exact git description.
 
 ## 19. Local development
 
-Go is not installed system-wide on this machine. A toolchain lives in the session
-scratchpad; if it is gone, download one (`https://go.dev/dl/`) and extract it
-rather than installing system-wide:
-
 ```sh
-export GOROOT=<scratchpad>/go PATH=$GOROOT/bin:$PATH
 go build ./... && go vet ./... && go test ./...
 ```
 
-Docker and Compose v2 are available locally for manual checks.
+Docker and Compose v2 are available locally for manual checks. `make install-user`
+puts the binary in `~/.local/bin`, which comes before `/usr/bin` in PATH and so
+takes precedence over an installed package; a shell that already resolved
+`hublot` keeps the old path until `hash -r`.
+
+Verifying the interface means driving it, not reading it: a pty plus `pyte`
+renders what a terminal would show, which is how the layout, the mouse, the
+small-terminal tiers and the failure dialogs are checked. Scripts for that
+belong in the scratchpad, not in the repository.

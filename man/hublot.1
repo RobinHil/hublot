@@ -33,8 +33,10 @@ Print the version and exit.
 .SH KEYS
 Lowercase is safe, uppercase is destructive or forced.
 .TP
-.B 1..6, tab, shift+tab
-Switch view.
+.B 1..6, tab, shift+tab, left, right
+Switch view. The tabs run containers, compose, images, volumes, networks,
+disk: stacks are how hosts are run, so they come before the loose objects
+underneath them.
 .TP
 .B /
 Incremental filter. Every space-separated term must match.
@@ -43,13 +45,30 @@ Incremental filter. Every space-separated term must match.
 Cycle the sort column, reverse the direction.
 .TP
 .B space, a
-Mark the row, mark everything the filter left visible.
+Select the row under the cursor, or everything the filter left visible. A
+selection is what makes an action apply to several rows at once: select, then
+press
+.BR S ,
+.B R
+or
+.B D
+and it runs on all of them. Selected rows carry a bar in the left margin, the
+header counts them, and
+.B esc
+clears the selection.
 .TP
 .B enter, l, e
 Detail pane, logs, shell inside the container.
 .TP
-.B S, R, P, K, D
-Stop, restart, pause or unpause, kill with a signal, remove.
+.B u, S, R, P, K, D
+Start, stop, restart, pause or unpause, kill with a signal, remove.
+.TP
+.B n
+Create something: a container from a form in the container and image views, a
+stack from a compose file in the compose view.
+.TP
+.B P
+In the image view, pull any reference by name.
 .TP
 .B x
 Contextual action palette, searchable by typing. It carries everything without
@@ -60,15 +79,147 @@ network, creating one.
 .TP
 .B t, ?, r, q
 Task panel, help, force refresh, quit.
+.SH COMPOSE
+Each project is a line of its own above its services, and that line is the
+whole stack. Actions apply to the row under the cursor:
+.BR l ,
+.BR u ,
+.B S
+and
+.B R
+act on everything from the project line and on one service from a service line.
+.B enter
+folds a stack, from its project line only.
+.B v
+reads the compose file in the panel without opening an editor, and
+.B c
+shows the configuration compose resolves from it.
+.B L
+reads the whole stack's logs from anywhere, and
+.B n
+brings up a stack from a compose file nothing has been created from yet.
+.SH EDITING
+.B E
+opens a project's compose file in your editor, and offers to apply what you
+wrote when it closes.
+.B n
+does the same for a path that holds no compose file yet: the directory and a
+starter file are created, opened, and offered up.
+.PP
+Paths typed into hublot understand
+.B ~
+and
+.BR $VARIABLES ,
+and a relative one is taken from the directory hublot was started in.
+.PP
+What happened is read from the file, not from the editor: quitting without
+writing, with
+.B :q
+or otherwise, changes nothing and is told so, and a stack created that way is
+taken back out, starter file and directory included. Only a file whose contents
+actually differ brings up the question of applying it.
+.PP
+The editor is asked for once and remembered in the configuration file. The
+answer comes from
+.I editor
+there, then from
+.I $VISUAL
+and
+.IR $EDITOR ,
+and otherwise from a list of what is installed: terminal editors first, since
+they open in this window, with an entry for typing any other command. An editor
+that opens its own window needs whatever makes it wait, and hublot adds that
+flag for the ones it knows.
+.SH THE SIDE PANEL
+Logs, inspect output, process lists and resolved configuration open in a panel
+beside the list rather than instead of it, so the thing being read stays next to
+the thing it is about.
+.TP
+.B ctrl+w
+Move the keyboard between the list and the panel.
+.TP
+.B W
+Cycle how much of the screen the panel takes: a third, a half, two thirds, all
+of it. The divider itself can be dragged with the mouse to any size in between.
+.TP
+.B esc
+Close the panel.
+.PP
+With the panel focused,
+.B /
+searches it,
+.B n
+and
+.B N
+walk the matches,
+.B f
+follows a live stream and
+.B w
+wraps long lines.
+.PP
+On a narrow terminal the panel moves below the list, and on a small one it takes
+the screen: the split is chosen from the size, not from a setting. The mouse
+works throughout: the wheel scrolls, a click selects a row or focuses the panel,
+and a click on the tab bar switches view.
 .PP
 The help overlay lists every binding and is generated from the same definitions
 the program dispatches on, so it cannot fall out of date.
+.SH THE SHELL
+.B e
+opens a shell inside the container under the cursor, full screen and on a
+screen of its own: it does not open on top of whatever was in the terminal
+before, and leaves nothing behind when it closes.
+.B exit
+or ctrl-d comes back to
+.BR hublot ,
+which refreshes, since a shell can have changed anything.
+.PP
+The shell run inside the container is bash when the image has one and sh
+otherwise. Set
+.B shell
+in the configuration file to run something else.
+.SH PAUSED CONTAINERS
+A paused container is frozen where it stands and still in memory. It never
+stopped, so it cannot be started:
+.B P
+is what lets it run again. The key bar reads
+.B unpause
+whenever the cursor is on a paused container, and starting one anyway says the
+same thing rather than only passing on the daemon's refusal.
+.SH WHEN SOMETHING FAILS
+A failed action shows the daemon's own message, which is accurate but written
+for someone who already knows what went wrong.
+.B hublot
+recognises the usual mistakes and puts a plain explanation above it: a host port
+already bound, a container name already used, an image that cannot be pulled, a
+compose variable with no value, a port below 1024, a full disk.
+.PP
+For a port clash it also names the container currently publishing that port, so
+the answer is on screen rather than two commands away. The daemon's message is
+never replaced, and nothing is claimed about a failure
+.B hublot
+does not recognise.
+.PP
+When the failure is in a file, the dialog offers to open it:
+.B e
+hands the compose file to your editor, and what you wrote is applied after a
+confirmation, running again the command that failed. A compose file that will
+not parse is named by compose itself, so this is the file the error is about
+and not a guess.
+.PP
+The output of a long command stays in the task panel, which
+.B t
+opens.
 .SH FILES
 .TP
 .I ~/.config/hublot/config.yaml
 Optional configuration. Every setting has a working default, so the file may be
 absent. Recognised keys: theme, stop_timeout, max_stat_streams, log_tail, shell,
-read_only, default_sort, sort_descending, confirm_destructive.
+read_only, default_sort, sort_descending, confirm_destructive, editor.
+.IP
+.B hublot
+writes this file itself when it learns something worth keeping, such as the
+editor you picked the first time you edited a compose file.
 .TP
 .I /var/run/docker.sock
 The daemon socket of a root installation. If DOCKER_HOST names a unix socket,
