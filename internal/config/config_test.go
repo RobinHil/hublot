@@ -7,6 +7,47 @@ import (
 	"time"
 )
 
+// write puts a config file where Load will look for it.
+func write(t *testing.T, contents string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	if err := os.MkdirAll(filepath.Join(dir, "hublot"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "hublot", "config.yaml"), []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPathFollowsXDGOnEveryPlatform(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "/somewhere/config")
+	got, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join("/somewhere/config", "hublot", "config.yaml"); got != want {
+		t.Errorf("path: got %q, want %q", got, want)
+	}
+}
+
+func TestPathFallsBackToDotConfig(t *testing.T) {
+	// Deliberately not os.UserConfigDir, which answers Library/Application
+	// Support on macOS: the documented location is ~/.config on both.
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "/home/someone")
+
+	got, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join("/home/someone", ".config", "hublot", "config.yaml"); got != want {
+		t.Errorf("path: got %q, want %q", got, want)
+	}
+}
+
 func TestLoadMissingFileIsNotAnError(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
@@ -20,17 +61,7 @@ func TestLoadMissingFileIsNotAnError(t *testing.T) {
 }
 
 func TestLoadReadsUserValues(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
-
-	path := filepath.Join(dir, "hublot")
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	content := "theme: mono\nstop_timeout: 3s\nmax_stat_streams: 8\nread_only: true\nshell: [/bin/zsh]\n"
-	if err := os.WriteFile(filepath.Join(path, "config.yaml"), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	write(t, "theme: mono\nstop_timeout: 3s\nmax_stat_streams: 8\nread_only: true\nshell: [/bin/zsh]\n")
 
 	cfg, err := Load()
 	if err != nil {
@@ -49,14 +80,7 @@ func TestLoadReadsUserValues(t *testing.T) {
 }
 
 func TestLoadRejectsMalformedFile(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
-	if err := os.MkdirAll(filepath.Join(dir, "hublot"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "hublot", "config.yaml"), []byte("theme: [unclosed"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	write(t, "theme: [unclosed")
 
 	// A broken file is reported rather than ignored: settings that do nothing
 	// are worse than an error at startup.

@@ -50,13 +50,24 @@ func Default() Config {
 	}
 }
 
-// Path is where the configuration file is looked for.
+// Path is where the configuration file is looked for: $XDG_CONFIG_HOME, else
+// ~/.config, on every platform.
+//
+// Not os.UserConfigDir: that answers ~/Library/Application Support on macOS,
+// which is right for a windowed application and wrong for this one. hublot is
+// a terminal program, its documentation says ~/.config/hublot/config.yaml, and
+// a file that silently lives somewhere else on one platform is worse than a
+// convention not followed.
 func Path() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("locating the user config directory: %w", err)
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		return filepath.Join(dir, "hublot", "config.yaml"), nil
 	}
-	return filepath.Join(dir, "hublot", "config.yaml"), nil
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("locating the home directory: %w", err)
+	}
+	return filepath.Join(home, ".config", "hublot", "config.yaml"), nil
 }
 
 // Load reads the configuration, falling back to defaults when the file does
