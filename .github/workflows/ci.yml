@@ -1,0 +1,505 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned rather than floating: a toolchain or a linter that moves on its own
+  # turns an unrelated push into a red build.
+  GO_VERSION: "1.27.1"
+  GOLANGCI_LINT_VERSION: "v2.13.2"
+
+jobs:
+  # Gate: nothing is built until formatting, vet, lints and tests pass.
+  #
+  # On both platforms, and that is not duplication for its own sake: the exec
+  # session and the terminal handling go through build-tagged code in the
+  # charm and docker libraries, so a Linux-only job would never compile the
+  # Darwin halves of them.
+  check:
+    name: Lint and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+
+      - name: Check formatting
+        run: |
+          set -euo pipefail
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Check go.mod is tidy
+        run: |
+          set -euo pipefail
+          cp go.mod go.mod.bak && cp go.sum go.sum.bak
+          go mod tidy
+          if ! diff -q go.mod go.mod.bak >/dev/null || ! diff -q go.sum go.sum.bak >/dev/null; then
+            echo "::error::go mod tidy changed go.mod or go.sum, commit the result"
+            diff -u go.mod.bak go.mod || true
+            exit 1
+          fi
+          rm go.mod.bak go.sum.bak
+
+      - run: go vet ./...
+
+      # The pure layers carry the tests that matter. -race because the stream
+      # goroutines feed the model through channels, and a data race there would
+      # show up as a corrupted screen on a user's machine rather than here.
+      - name: Tests
+        run: go test -race -count=1 ./...
+
+      - name: Lint
+        if: runner.os == 'Linux'
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+
+      # A malformed desktop entry is not an error anywhere: menus just ignore
+      # it, and the launcher silently never appears. So it is checked here.
+      - name: Validate the desktop entry and the icons
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends desktop-file-utils librsvg2-bin \
+            imagemagick gir1.2-gdkpixbuf-2.0 python3-gi file
+          desktop-file-validate packaging/hublot.desktop
+
+          # Desktop icon loaders sniff only the first bytes of a file for
+          # "<svg". An XML declaration and a comment ahead of the opening tag
+          # push it out of that window, and the icon then fails to load with no
+          # error anywhere: the launcher just shows a blank. rsvg-convert
+          # accepts such a file happily, so rendering it proves nothing.
+          if [ "$(grep -bo '<svg' packaging/icons/hublot.svg | head -1 | cut -d: -f1)" -gt 128 ]; then
+            echo "::error::packaging/icons/hublot.svg must open with its <svg> tag, or desktop icon loaders reject it"
+            exit 1
+          fi
+          # And the loader itself has the last word.
+          python3 - <<'PROBE'
+          import gi
+          gi.require_version("GdkPixbuf", "2.0")
+          from gi.repository import GdkPixbuf
+          GdkPixbuf.Pixbuf.new_from_file("packaging/icons/hublot.svg")
+          print("the svg loads through gdk-pixbuf")
+          PROBE
+
+          # The PNGs are committed rather than rendered at package time, so they
+          # can fall behind the SVG. They are compared by pixels rather than by
+          # bytes: librsvg and cairo differ between this runner and a
+          # developer's machine, and two byte-different files can be the same
+          # image. A real edit to the SVG moves far more pixels than that.
+          for size in 16 24 32 48 64 128 256; do
+            committed="packaging/icons/hublot-$size.png"
+            rsvg-convert -w "$size" -h "$size" packaging/icons/hublot.svg -o "/tmp/fresh-$size.png"
+
+            dimensions=$(identify -format '%wx%h' "$committed")
+            if [ "$dimensions" != "${size}x${size}" ]; then
+              echo "::error::$committed is ${dimensions}, expected ${size}x${size}"
+              exit 1
+            fi
+
+            # ImageMagick 6 prints "0", ImageMagick 7 prints "0 (0)": take the
+            # count and drop any fractional part.
+            # compare exits non-zero as soon as the images differ at all, so
+            # its status is swallowed here: the pixel count is the answer, not
+            # the exit code.
+            differing=$({ compare -metric AE "/tmp/fresh-$size.png" "$committed" null: 2>&1 || true; } | awk '{print $1}')
+            differing=${differing%%.*}
+            allowed=$(( size * size / 50 + 8 ))
+            if [ "$differing" -gt "$allowed" ]; then
+              echo "::error::$committed no longer matches the svg ($differing pixels differ, $allowed tolerated), run make icons"
+              exit 1
+            fi
+          done
+
+  build-linux:
+    name: Build the Linux packages
+    needs: check
+    timeout-minutes: 30
+    # The oldest generally available image, deliberately: what decides where a
+    # package installs is the toolchain that built it, and a newer runner
+    # covers fewer systems rather than more. Nothing here links libc, but the
+    # AppImage tooling does.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The version is taken from git describe, which needs the tags.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+
+      - name: Install nfpm
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+
+      # appimagetool needs FUSE to run, which a runner does not have; extracting
+      # it first is the documented way around that.
+      - name: Install appimagetool
+        run: |
+          set -euo pipefail
+          curl -fsSLo /usr/local/bin/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x /usr/local/bin/appimagetool
+          echo "APPIMAGE_EXTRACT_AND_RUN=1" >> "$GITHUB_ENV"
+
+      - name: Build the packages
+        run: make dist
+
+      # The binary is built here and never run by the packaging steps. This is
+      # the cheapest check that it starts at all, and it doubles as proof that
+      # the version really was injected: a package labelled with a version whose
+      # binary reports "dev" is a broken release.
+      - name: Smoke test the binary
+        run: |
+          set -euo pipefail
+          printed=$(./dist/hublot -version)
+          declared=$(git describe --tags --always --dirty)
+          echo "reported: $printed, git says: $declared"
+          if [ "$printed" != "$declared" ]; then
+            echo "::error::the binary reports $printed but git describes $declared"
+            exit 1
+          fi
+          if [ "$printed" = "dev" ]; then
+            echo "::error::the version was not injected at build time"
+            exit 1
+          fi
+
+      - name: Check every package format was produced
+        run: |
+          set -euo pipefail
+          for pattern in dist/*.deb dist/*.rpm dist/*.AppImage dist/*.tar.gz; do
+            if ! compgen -G "$pattern" > /dev/null; then
+              echo "::error::nothing matched $pattern"
+              exit 1
+            fi
+          done
+          ls -la dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-x86_64
+          if-no-files-found: error
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.AppImage
+
+  build-macos:
+    name: Build the macOS binaries
+    needs: check
+    timeout-minutes: 20
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+
+      # One archive per architecture rather than a universal binary: hublot is a
+      # plain Go program with no bundle to put a fat binary in, and Homebrew and
+      # curl users pick by architecture anyway.
+      # No cgo anywhere in the dependency tree, so the binaries carry no libc
+      # constraint. Set here rather than workflow-wide: `go test -race` in the
+      # gate needs cgo enabled, and the Linux and Arch builds get it from the
+      # Makefile and the PKGBUILD.
+      - name: Build both architectures
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          version=$(git describe --tags --always --dirty)
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            GOOS=darwin GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X main.version=$version" \
+              -o "dist/hublot" ./cmd/hublot
+            tar -C dist -czf "dist/hublot-$version-darwin-$arch.tar.gz" hublot
+            rm dist/hublot
+          done
+          ls -la dist
+
+      # The runner is arm64, so only that archive can be started here. The
+      # amd64 one is checked for what can be checked without running it.
+      - name: Smoke test the native archive
+        run: |
+          set -euo pipefail
+          version=$(git describe --tags --always --dirty)
+          tar -C dist -xzf "dist/hublot-$version-darwin-arm64.tar.gz"
+          printed=$(./dist/hublot -version)
+          echo "reported: $printed"
+          if [ "$printed" != "$version" ]; then
+            echo "::error::the binary reports $printed but git describes $version"
+            exit 1
+          fi
+          file "dist/hublot"
+          rm dist/hublot
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos
+          if-no-files-found: error
+          path: dist/*.tar.gz
+
+  # Arch has no package in the release: a binary package built today is linked
+  # against today's rolling libraries, and Arch users build from the PKGBUILD
+  # instead. What this job is for is proving that the recipe still works,
+  # because a tag whose PKGBUILD is broken is an incomplete release even when
+  # every attached file is sound.
+  build-arch:
+    name: Build the Arch package
+    needs: check
+    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    # makepkg exists only on Arch, and Arch is a rolling release: what is worth
+    # building against is what an Arch user has today. Nothing is cached here
+    # for the same reason.
+    container: archlinux:base-devel
+    steps:
+      - name: Install git and go
+        run: pacman -Syu --noconfirm --needed git go
+
+      - uses: actions/checkout@v7
+
+      # The published PKGBUILD builds a released tag, which is right for a user
+      # and useless here: on a pull request it would compile the last release
+      # and ignore the code under review. So the tarball it expects is produced
+      # from this checkout, under the exact name and prefix build() unpacks.
+      # Only the provenance of the sources changes; build(), check() and
+      # package() run byte for byte as an AUR user runs them.
+      - name: Point the PKGBUILD at this checkout
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          pkgver=$(grep -m1 '^pkgver=' packaging/aur/PKGBUILD | cut -d= -f2)
+          git archive --format=tar.gz \
+            --prefix="hublot-$pkgver/" \
+            -o "packaging/aur/hublot-$pkgver.tar.gz" HEAD
+
+          cd packaging/aur
+          sed -i 's|^source=.*|source=("$pkgname-$pkgver.tar.gz")|' PKGBUILD
+          echo "--- the one line that differs from the published PKGBUILD ---"
+          grep -E '^(source|sha256sums)=' PKGBUILD
+
+      - name: Create the user makepkg insists on
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      # -s installs what the PKGBUILD declares through pacman, which is the
+      # second thing this job is for: a makedepends the recipe forgets is one
+      # the build no longer finds, here rather than on a user's machine.
+      # check() runs the test suite as part of this.
+      - name: Build the package
+        working-directory: packaging/aur
+        run: sudo -u builder makepkg -s --noconfirm
+
+      - name: Check the package carries what it claims
+        working-directory: packaging/aur
+        run: |
+          set -euo pipefail
+          pkg=$(ls ./*.pkg.tar.zst | grep -v -- '-debug-')
+          echo "inspecting $pkg"
+          mkdir -p inspect
+          bsdtar -xf "$pkg" -C inspect
+          # makepkg compresses man pages itself, hence the .gz here where the
+          # PKGBUILD installs a plain hublot.1.
+          for file in \
+            "usr/bin/hublot" \
+            "usr/share/licenses/hublot/LICENSE" \
+            "usr/share/licenses/hublot/THIRD-PARTY-LICENSES.txt" \
+            "usr/share/man/man1/hublot.1.gz" \
+            "usr/share/applications/hublot.desktop" \
+            "usr/share/icons/hicolor/scalable/apps/hublot.svg" \
+            "usr/share/icons/hicolor/48x48/apps/hublot.png"; do
+            if [ ! -f "inspect/$file" ]; then
+              echo "::error::the package is missing $file"
+              exit 1
+            fi
+          done
+          # pacman installed only what the recipe declares, so a library the
+          # PKGBUILD forgot would fail to resolve right here.
+          inspect/usr/bin/hublot -version
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: arch-x86_64
+          if-no-files-found: error
+          retention-days: 14
+          path: packaging/aur/*.pkg.tar.zst
+
+  # The packages are built on Ubuntu and, until this job, installed nowhere.
+  # Each case starts from a stock image of the distribution the package targets
+  # and lets that distribution's package manager resolve what the package
+  # declares. Nothing is compiled here.
+  install-linux:
+    name: Install ${{ matrix.case }}
+    needs: [build-linux, build-arch]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: the .deb on Debian
+            image: debian:stable-slim
+            script: |
+              apt-get update -qq
+              pkg=$(ls ./linux/*.deb)
+              apt-get install -y "$pkg"
+              hublot -version
+              # Asked of dpkg rather than of the filesystem: a slim image
+              # carries path-exclude rules for man pages, so what matters is
+              # that the package declares it.
+              dpkg -L hublot | grep -q 'man1/hublot.1.gz'
+              # Apache-2.0 notices travel with the binary, or the package is
+              # not distributable.
+              test -s /usr/share/licenses/hublot/THIRD-PARTY-LICENSES.txt
+              # The launcher and at least the scalable icon, where a menu looks.
+              test -f /usr/share/applications/hublot.desktop
+              test -f /usr/share/icons/hicolor/scalable/apps/hublot.svg
+
+          - case: the .rpm on Fedora
+            image: fedora:latest
+            script: |
+              pkg=$(ls ./linux/*.rpm)
+              dnf install -y "$pkg"
+              hublot -version
+              rpm -ql hublot | grep -q 'man1/hublot.1.gz'
+              test -s /usr/share/licenses/hublot/THIRD-PARTY-LICENSES.txt
+              test -f /usr/share/applications/hublot.desktop
+              test -f /usr/share/icons/hicolor/scalable/apps/hublot.svg
+
+          # The AppImage exists for distributions the two packages above do not
+          # cover. A stock image is not a desktop, so this also proves the
+          # bundle needs nothing from one: hublot is a terminal program and
+          # links no GUI library at all.
+          - case: the AppImage on Fedora
+            image: fedora:latest
+            script: |
+              app=$(ls ./linux/*.AppImage)
+              chmod +x "$app"
+              APPIMAGE_EXTRACT_AND_RUN=1 "$app" -version
+
+          # The one case that installs what build-arch produced. It means more
+          # here than it does there: makepkg -s had already installed every
+          # dependency before the package existed, so nothing proved they could
+          # be resolved from a clean system. pacman -U on a stock image does.
+          - case: the Arch package on Arch
+            image: archlinux:base
+            script: |
+              pacman -Sy --noconfirm
+              pkg=$(ls ./arch/*.pkg.tar.zst | grep -v -- '-debug-')
+              pacman -U --noconfirm "$pkg"
+              hublot -version
+              test -s /usr/share/licenses/hublot/THIRD-PARTY-LICENSES.txt
+              test -f /usr/share/applications/hublot.desktop
+              test -f /usr/share/icons/hicolor/scalable/apps/hublot.svg
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux-x86_64
+          path: artifacts/linux
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: arch-x86_64
+          path: artifacts/arch
+
+      - run: ls -laR artifacts
+
+      # Run through docker rather than the job's own container:, so the actions
+      # above keep running on the Ubuntu runner: a slim image carries less of a
+      # base system than the runner needs to mount itself into.
+      - name: Install it and start the binary
+        run: |
+          set -euo pipefail
+          cat > steps.sh <<'INNER'
+          set -euxo pipefail
+          ${{ matrix.script }}
+          INNER
+          docker run --rm \
+            -v "$PWD/artifacts:/artifacts" \
+            -v "$PWD/steps.sh:/steps.sh:ro" \
+            -w /artifacts \
+            "${{ matrix.image }}" \
+            bash /steps.sh
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    # The install job and the macOS build, and only them: install-linux already
+    # waits on what produced what it installs, so build-linux and build-arch
+    # gate this transitively.
+    #
+    # Nothing reaches the releases page, then, that has not been installed
+    # somewhere and started. build-arch counts too, by way of install-linux,
+    # although the release carries no Arch package: the release notes send Arch
+    # users to the PKGBUILD, so a tag whose recipe is broken is an incomplete
+    # release even when every attached file is sound.
+    needs: [install-linux, build-macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      # Named one by one: downloading everything the run produced would sweep in
+      # arch-x86_64, which exists only so install-linux can install it.
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux-x86_64
+          path: artifacts/linux
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: macos
+          path: artifacts/macos
+
+      - run: ls -laR artifacts
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          body: |
+            **Debian and Ubuntu**: the `.deb`. **Fedora and RHEL**: the `.rpm`.
+            **Anything else**: the `.AppImage`, which needs nothing installed.
+
+            **Arch**: build from `packaging/aur/PKGBUILD`, which this release
+            was tested against.
+
+            **macOS**: one tarball per architecture, unsigned. `hublot` talks to
+            the local Docker socket only.
+
+            See the man page, `man hublot`, for the keys and the configuration
+            file.
