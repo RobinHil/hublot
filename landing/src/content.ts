@@ -85,6 +85,13 @@ export const features: Feature[] = [
   },
 ];
 
+/** Asks GitHub which release is current, so no version is written down here
+ *  to go stale. It is two statements on one line because it is one idea. */
+const RESOLVE_VERSION =
+  "version=$(curl -fsSLI -o /dev/null -w '%{url_effective}' " +
+  "https://github.com/RobinHil/hublot/releases/latest | sed 's|.*/tag/v||'); " +
+  "base=https://github.com/RobinHil/hublot/releases/download/v$version";
+
 export type Install = {
   id: string;
   label: string;
@@ -105,19 +112,21 @@ export const installs: Install[] = [
   {
     id: "debian",
     label: "Debian, Ubuntu",
-    note: "The .deb from the latest release.",
+    note: "Release files carry their version, so the first line asks which one is current.",
     commands: [
-      "curl -LO https://github.com/RobinHil/hublot/releases/latest/download/hublot_amd64.deb",
-      "sudo apt install ./hublot_amd64.deb",
+      RESOLVE_VERSION,
+      "curl -LO $base/hublot_${version}_amd64.deb",
+      "sudo apt install ./hublot_${version}_amd64.deb",
     ],
   },
   {
     id: "fedora",
     label: "Fedora, RHEL",
-    note: "The .rpm from the latest release.",
+    note: "Release files carry their version, so the first line asks which one is current.",
     commands: [
-      "curl -LO https://github.com/RobinHil/hublot/releases/latest/download/hublot.x86_64.rpm",
-      "sudo dnf install ./hublot.x86_64.rpm",
+      RESOLVE_VERSION,
+      "curl -LO $base/hublot-${version}-1.x86_64.rpm",
+      "sudo dnf install ./hublot-${version}-1.x86_64.rpm",
     ],
   },
   {
@@ -125,8 +134,9 @@ export const installs: Install[] = [
     label: "Any distribution",
     note: "The AppImage needs nothing installed: make it executable and run it.",
     commands: [
-      "curl -LO https://github.com/RobinHil/hublot/releases/latest/download/hublot-x86_64.AppImage",
-      "chmod +x hublot-x86_64.AppImage && ./hublot-x86_64.AppImage",
+      RESOLVE_VERSION,
+      "curl -LO $base/hublot-${version}-x86_64.AppImage",
+      "chmod +x hublot-*.AppImage && ./hublot-*.AppImage",
     ],
   },
   {

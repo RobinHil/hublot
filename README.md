@@ -43,10 +43,22 @@ in a terminal.
 | Where | How |
 |---|---|
 | Arch | `cd packaging/aur && makepkg -si` |
-| Debian, Ubuntu | `sudo apt install ./hublot_*.deb` from the [latest release](https://github.com/RobinHil/hublot/releases/latest) |
-| Fedora, RHEL | `sudo dnf install ./hublot-*.rpm` from the latest release |
+| Debian, Ubuntu | the `.deb` from the [latest release](https://github.com/RobinHil/hublot/releases/latest) |
+| Fedora, RHEL | the `.rpm` from the latest release |
 | Anywhere else | the `.AppImage` from the latest release, which needs nothing installed |
 | From source | `make build && ./dist/hublot`, with the Go version `go.mod` asks for |
+
+Release files carry their version, so the name to download is not a constant.
+This asks GitHub which version is current and fetches the matching file:
+
+```sh
+version=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/RobinHil/hublot/releases/latest | sed 's|.*/tag/v||')
+base=https://github.com/RobinHil/hublot/releases/download/v$version
+
+curl -LO $base/hublot_${version}_amd64.deb      && sudo apt install ./hublot_${version}_amd64.deb
+curl -LO $base/hublot-${version}-1.x86_64.rpm   && sudo dnf install ./hublot-${version}-1.x86_64.rpm
+curl -LO $base/hublot-${version}-x86_64.AppImage && chmod +x hublot-*.AppImage && ./hublot-*.AppImage
+```
 
 Then `hublot`, or `hublot --read-only` to look at a server without being able
 to change anything. Access is Docker's own: being in the group that owns the
