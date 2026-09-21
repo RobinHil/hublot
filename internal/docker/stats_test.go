@@ -2,6 +2,7 @@ package docker
 
 import (
 	"math"
+	"os"
 	"testing"
 
 	"github.com/docker/docker/api/types/container"
@@ -239,5 +240,99 @@ func TestCompareAPIVersion(t *testing.T) {
 	}
 	if compareAPIVersion("1.47", "1.42") != 1 {
 		t.Error("1.47 is newer than 1.42")
+	}
+}
+
+func TestResolveSocket(t *testing.T) {
+	const rootSocket = "/var/run/docker.sock"
+	const rootless = "/run/user/1000/docker.sock"
+
+	// exists builds a stat func that succeeds only for the named paths.
+	exists := func(paths ...string) func(string) error {
+		set := map[string]bool{}
+		for _, p := range paths {
+			set[p] = true
+		}
+		return func(path string) error {
+			if set[path] {
+				return nil
+			}
+			return os.ErrNotExist
+		}
+	}
+	env := func(values map[string]string) func(string) string {
+		return func(key string) string { return values[key] }
+	}
+
+	tests := []struct {
+		name string
+		env  map[string]string
+		stat func(string) error
+		uid  int
+		want string
+	}{
+		{
+			name: "DOCKER_HOST wins",
+			env:  map[string]string{"DOCKER_HOST": "unix:///elsewhere/docker.sock"},
+			stat: exists(rootSocket),
+			uid:  1000,
+			want: "/elsewhere/docker.sock",
+		},
+		{
+			name: "the root daemon comes first",
+			env:  map[string]string{"XDG_RUNTIME_DIR": "/run/user/1000"},
+			stat: exists(rootSocket, rootless),
+			uid:  1000,
+			want: rootSocket,
+		},
+		{
+			// A rootless installation never creates the root socket, and used
+			// to be told there was no daemon at all.
+			name: "rootless is found when there is no root socket",
+			env:  map[string]string{"XDG_RUNTIME_DIR": "/run/user/1000"},
+			stat: exists(rootless),
+			uid:  1000,
+			want: rootless,
+		},
+		{
+			name: "the runtime directory is derived when unset",
+			env:  map[string]string{},
+			stat: exists(rootless),
+			uid:  1000,
+			want: rootless,
+		},
+		{
+			// Nothing to find: the error should name the socket most people
+			// mean, not a path derived from a guess.
+			name: "nothing there names the root socket",
+			env:  map[string]string{},
+			stat: exists(),
+			uid:  1000,
+			want: rootSocket,
+		},
+		{
+			// Running as root, there is no per-user runtime directory to
+			// derive, and /run/user/0 is not a thing to suggest.
+			name: "root does not get a derived runtime directory",
+			env:  map[string]string{},
+			stat: exists(),
+			uid:  0,
+			want: rootSocket,
+		},
+		{
+			name: "a tcp DOCKER_HOST is ignored, since only sockets are supported",
+			env:  map[string]string{"DOCKER_HOST": "tcp://192.0.2.1:2375"},
+			stat: exists(rootSocket),
+			uid:  1000,
+			want: rootSocket,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ResolveSocket(env(tt.env), tt.stat, tt.uid); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

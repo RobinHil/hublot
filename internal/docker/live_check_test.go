@@ -2,7 +2,7 @@
 
 // Checks the docker layer against a real daemon. Behind a build tag on
 // purpose: it never runs in CI and never runs by default, so the suite that
-// does run needs no daemon (AGENTS.md section 12).
+// does run needs no daemon (AGENTS.md section 13).
 //
 //	go test -tags live ./internal/docker/
 //
