@@ -1,0 +1,6 @@
+#!/bin/sh
+# hublot is a terminal program: the AppImage exists for distributions the .deb
+# and .rpm do not cover, not for a launcher menu. Exec straight into the binary
+# so signals and the terminal are handled by it rather than by a wrapper.
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "$HERE/usr/bin/hublot" "$@"

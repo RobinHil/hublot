@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!--
+    The hublot icon: a porthole, which is what the name means, with a stack of
+    containers behind the glass. Deliberately nothing of Docker's own branding,
+    no whale and no trademarked mark: the blue and the containers carry the
+    association on their own.
+
+    This SVG is the source; the PNGs next to it come from `make icons` and are
+    committed, so building a package needs no renderer.
+
+    Keep the opening tag on the first line. Desktop icon loaders sniff only the
+    first bytes of a file for "<svg", so an XML declaration and a comment ahead
+    of it push it out of that window and the icon silently fails to load, which
+    is exactly what happened the first time this file was written.
+  -->
+  <defs>
+    <linearGradient id="rim" x1="0.25" y1="0" x2="0.75" y2="1">
+      <stop offset="0" stop-color="#6fb7ff"/>
+      <stop offset="0.5" stop-color="#2496ed"/>
+      <stop offset="1" stop-color="#1663a8"/>
+    </linearGradient>
+    <radialGradient id="glass" cx="0.36" cy="0.3" r="0.85">
+      <stop offset="0" stop-color="#153a56"/>
+      <stop offset="1" stop-color="#08192a"/>
+    </radialGradient>
+  </defs>
+
+  <!-- the ring, with its rivets -->
+  <circle cx="128" cy="128" r="124" fill="url(#rim)"/>
+  <circle cx="128" cy="128" r="124" fill="none" stroke="#0f4b80" stroke-width="4"/>
+  <g fill="#0f4b80">
+    <circle cx="128" cy="18" r="9"/>
+    <circle cx="128" cy="238" r="9"/>
+    <circle cx="18" cy="128" r="9"/>
+    <circle cx="238" cy="128" r="9"/>
+  </g>
+
+  <!-- the glass -->
+  <circle cx="128" cy="128" r="96" fill="url(#glass)"/>
+  <circle cx="128" cy="128" r="96" fill="none" stroke="#0a2b47" stroke-width="7"/>
+
+  <!-- the containers behind it -->
+  <g fill="#eaf2fa">
+    <rect x="76" y="148" width="104" height="26" rx="5"/>
+    <rect x="76" y="116" width="66" height="26" rx="5"/>
+    <rect x="150" y="116" width="30" height="26" rx="5" opacity="0.55"/>
+    <rect x="94" y="84" width="66" height="26" rx="5" opacity="0.8"/>
+  </g>
+
+  <!-- a single specular arc, which is what keeps it from looking flat -->
+  <path d="M60 78a96 96 0 0 1 42-32" fill="none" stroke="#ffffff"
+        stroke-width="10" stroke-linecap="round" opacity="0.16"/>
+</svg>

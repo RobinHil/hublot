@@ -1,0 +1,95 @@
+# Single source for the .deb and the .rpm: nfpm builds both from this file, so
+# the two cannot drift apart. Never hand-write a spec file or a DEBIAN/control
+# next to it (AGENTS.md section 16).
+#
+#   nfpm pkg --packager deb --target dist/
+#   nfpm pkg --packager rpm --target dist/
+#
+# VERSION and ARCH come from the Makefile through the environment.
+name: hublot
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: utils
+priority: optional
+maintainer: Robin HILAIRE <hilairerob84@gmail.com>
+description: |
+  Terminal UI for a local Docker daemon.
+  Live per-container resource usage, keyboard-driven navigation into every
+  object the daemon manages, Compose projects grouped with drift detection,
+  and disk pruning with an accurate preview of what would be destroyed.
+vendor: Robin HILAIRE
+homepage: https://github.com/RobinHil/hublot
+license: MIT
+
+# Docker is a recommendation rather than a dependency on purpose: hublot must
+# install on a machine where the daemon is not there yet, and it says so
+# clearly when it cannot reach the socket.
+recommends:
+  - docker-ce
+
+contents:
+  - src: dist/hublot
+    dst: /usr/bin/hublot
+    file_info:
+      mode: 0755
+
+  - src: LICENSE
+    dst: /usr/share/licenses/hublot/LICENSE
+    file_info:
+      mode: 0644
+
+  # The dependency tree carries Apache-2.0 code, and section 4 of that licence
+  # asks for the NOTICE files of what is redistributed to travel with it.
+  - src: dist/THIRD-PARTY-LICENSES.txt
+    dst: /usr/share/licenses/hublot/THIRD-PARTY-LICENSES.txt
+    file_info:
+      mode: 0644
+
+  - src: dist/hublot.1.gz
+    dst: /usr/share/man/man1/hublot.1.gz
+    file_info:
+      mode: 0644
+
+  # The launcher, so hublot shows up in the applications menu. It asks for a
+  # terminal, exactly as htop's own entry does.
+  - src: packaging/hublot.desktop
+    dst: /usr/share/applications/hublot.desktop
+    file_info:
+      mode: 0644
+
+  - src: packaging/icons/hublot.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/hublot.svg
+    file_info:
+      mode: 0644
+
+  # The fixed sizes as well: a menu that does not rasterise SVG falls back to
+  # the nearest PNG, and every desktop reads these.
+  - src: packaging/icons/hublot-16.png
+    dst: /usr/share/icons/hicolor/16x16/apps/hublot.png
+    file_info:
+      mode: 0644
+  - src: packaging/icons/hublot-24.png
+    dst: /usr/share/icons/hicolor/24x24/apps/hublot.png
+    file_info:
+      mode: 0644
+  - src: packaging/icons/hublot-32.png
+    dst: /usr/share/icons/hicolor/32x32/apps/hublot.png
+    file_info:
+      mode: 0644
+  - src: packaging/icons/hublot-48.png
+    dst: /usr/share/icons/hicolor/48x48/apps/hublot.png
+    file_info:
+      mode: 0644
+  - src: packaging/icons/hublot-64.png
+    dst: /usr/share/icons/hicolor/64x64/apps/hublot.png
+    file_info:
+      mode: 0644
+  - src: packaging/icons/hublot-128.png
+    dst: /usr/share/icons/hicolor/128x128/apps/hublot.png
+    file_info:
+      mode: 0644
+  - src: packaging/icons/hublot-256.png
+    dst: /usr/share/icons/hicolor/256x256/apps/hublot.png
+    file_info:
+      mode: 0644

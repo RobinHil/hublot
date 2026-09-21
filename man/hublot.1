@@ -1,0 +1,93 @@
+.TH HUBLOT 1 "2026" "hublot" "User Commands"
+.SH NAME
+hublot \- terminal UI for a local Docker daemon
+.SH SYNOPSIS
+.B hublot
+.RI [ flags ]
+.SH DESCRIPTION
+.B hublot
+is a full-screen terminal interface for the Docker daemon running on the local
+machine: live CPU, memory, network and block IO per container, keyboard-driven
+navigation into containers, images, volumes, networks and Compose projects, and
+every action the Engine API exposes without leaving the interface.
+.PP
+Two things set it apart from similar tools. It treats disk hygiene as a first
+class concern: a view of where disk space went, pruning per object category, and
+a preview of exactly what a prune would destroy, reconstructed object by object
+because the Engine API offers no dry run. And it is Compose aware: stacks are
+rebuilt from the labels Compose writes, grouped by project and service, with
+drift detection that tells you whether the running containers still match the
+YAML on disk.
+.PP
+.B hublot
+talks to the local daemon socket only. Remote hosts, contexts, TCP and SSH
+transports are deliberately out of scope.
+.SH FLAGS
+.TP
+.B \-read\-only
+Disable every action that changes anything. Destructive keys are greyed out and
+a badge appears in the status bar. Use this to look at a server safely.
+.TP
+.B \-version
+Print the version and exit.
+.SH KEYS
+Lowercase is safe, uppercase is destructive or forced.
+.TP
+.B 1..6, tab, shift+tab
+Switch view.
+.TP
+.B /
+Incremental filter. Every space-separated term must match.
+.TP
+.B s, A
+Cycle the sort column, reverse the direction.
+.TP
+.B space, a
+Mark the row, mark everything the filter left visible.
+.TP
+.B enter, l, e
+Detail pane, logs, shell inside the container.
+.TP
+.B S, R, P, K, D
+Stop, restart, pause or unpause, kill with a signal, remove.
+.TP
+.B x
+Contextual action palette, searchable by typing. It carries everything without
+a key of its own: on a container, rename, cpu and memory limits, processes,
+filesystem changes, commit, export, copying files in and out, and attaching or
+detaching networks; on an image, tag, untag, save and load; on a volume or a
+network, creating one.
+.TP
+.B t, ?, r, q
+Task panel, help, force refresh, quit.
+.PP
+The help overlay lists every binding and is generated from the same definitions
+the program dispatches on, so it cannot fall out of date.
+.SH FILES
+.TP
+.I ~/.config/hublot/config.yaml
+Optional configuration. Every setting has a working default, so the file may be
+absent. Recognised keys: theme, stop_timeout, max_stat_streams, log_tail, shell,
+read_only, default_sort, sort_descending, confirm_destructive.
+.TP
+.I /var/run/docker.sock
+The daemon socket. If DOCKER_HOST names a unix socket, that one is used instead.
+.SH EXIT STATUS
+.B hublot
+exits with 0 when the interface closes normally, and 1 when the daemon cannot be
+reached or the configuration file cannot be parsed.
+.SH LICENCE
+hublot is distributed under the MIT licence. The binary links modules under the
+MIT, Apache-2.0 and BSD-3-Clause licences; their full text and notices are
+installed at
+.IR /usr/share/licenses/hublot/THIRD-PARTY-LICENSES.txt .
+.PP
+Docker is a trademark of Docker, Inc.
+.B hublot
+is an independent project, not affiliated with, endorsed by or sponsored by
+Docker, Inc.
+.SH SEE ALSO
+.BR docker (1),
+.BR docker-compose (1)
+.SH AUTHOR
+Robin HILAIRE

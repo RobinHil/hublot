@@ -1,0 +1,74 @@
+# Maintainer: Robin HILAIRE <hilairerob84@gmail.com>
+#
+# This builds a published release, not the working tree: makepkg fetches the
+# tarball GitHub generates for the v$pkgver tag.
+#
+# Before publishing a new version to the AUR, bump pkgver to the new tag and run
+# updpkgsums in this directory to refresh the checksum below. A fix to the
+# recipe itself, with the upstream version unchanged, bumps pkgrel instead: that
+# is what carries a packaging correction to people who already installed a
+# broken build, without inventing a release that does not exist. A new upstream
+# version resets pkgrel to 1, as here.
+
+pkgname=hublot
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Terminal UI for a local Docker daemon, with compose awareness and prune previews"
+arch=('x86_64' 'aarch64')
+url="https://github.com/RobinHil/hublot"
+license=('MIT')
+
+# Only at runtime, and only to be useful: hublot talks to the daemon socket and
+# shells out to the compose plugin for stack actions. It installs and starts
+# without either, and says what is missing rather than failing silently.
+optdepends=(
+  'docker: the daemon hublot connects to'
+  'docker-compose: compose stack actions'
+)
+makedepends=('go' 'git')
+
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname-$pkgver"
+
+  # No cgo anywhere in the dependency tree, so the binary carries no libc
+  # version constraint (AGENTS.md section 16). PIE still links internally.
+  export CGO_ENABLED=0
+  export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw"
+
+  go build -ldflags "-s -w -X main.version=$pkgver" -o hublot ./cmd/hublot
+
+  # The binary links Apache-2.0 code, whose NOTICE files have to travel with
+  # what is redistributed.
+  ./scripts/third-party-licenses.sh THIRD-PARTY-LICENSES.txt
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  # The pure layers carry the tests that matter, the prune previews above all:
+  # a bug there destroys user data.
+  go test ./...
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+
+  install -Dm755 hublot "$pkgdir/usr/bin/hublot"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 THIRD-PARTY-LICENSES.txt \
+    "$pkgdir/usr/share/licenses/$pkgname/THIRD-PARTY-LICENSES.txt"
+  install -Dm644 man/hublot.1 "$pkgdir/usr/share/man/man1/hublot.1"
+
+  # The launcher and its icons. hicolor-icon-theme and desktop-file-utils own
+  # the caches these land in, and pacman's hooks refresh them, so the package
+  # needs no install scriptlet of its own.
+  install -Dm644 packaging/hublot.desktop "$pkgdir/usr/share/applications/hublot.desktop"
+  install -Dm644 packaging/icons/hublot.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/hublot.svg"
+  for size in 16 24 32 48 64 128 256; do
+    install -Dm644 "packaging/icons/hublot-$size.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/hublot.png"
+  done
+}
