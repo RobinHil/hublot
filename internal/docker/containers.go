@@ -89,7 +89,9 @@ func (c *Client) InspectContainer(ctx context.Context, id string) (ContainerDeta
 		return ContainerDetail{}, fmt.Errorf("inspecting container %s: %w", ShortID(id), err)
 	}
 
-	d := ContainerDetail{Raw: raw}
+	// Indented, because this is read in a panel a few dozen columns wide
+	// rather than piped into a tool.
+	d := ContainerDetail{Raw: indentJSON(raw)}
 	d.ID = insp.ID
 	d.Name = strings.TrimPrefix(insp.Name, "/")
 	d.Names = []string{d.Name}

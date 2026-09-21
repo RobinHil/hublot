@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -94,5 +95,52 @@ func TestNormalisedRepairsNonsense(t *testing.T) {
 	d := Default()
 	if cfg.StopTimeout != d.StopTimeout || cfg.MaxStatStreams != d.MaxStatStreams || cfg.LogTail != d.LogTail {
 		t.Errorf("nonsense values fall back to defaults: %+v", cfg)
+	}
+}
+
+func TestSaveRoundTrips(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	cfg := Default()
+	cfg.Editor = "code --wait"
+	cfg.Theme = "mono"
+
+	if err := Save(cfg); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	// Saving is for remembering an answer, so what comes back has to be what
+	// went in, not a file that needs hand-repair afterwards.
+	back, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if back.Editor != "code --wait" || back.Theme != "mono" {
+		t.Errorf("round trip: %+v", back)
+	}
+	if back.StopTimeout != cfg.StopTimeout || back.MaxStatStreams != cfg.MaxStatStreams {
+		t.Errorf("the rest of the settings must survive: %+v", back)
+	}
+
+	path, _ := Path()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(body), "# hublot configuration") {
+		t.Errorf("the file should say what it is:\n%s", body)
+	}
+}
+
+func TestSaveCreatesTheDirectory(t *testing.T) {
+	// The first save is usually the first time the directory is needed.
+	dir := filepath.Join(t.TempDir(), "nothing", "here")
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	if err := Save(Default()); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := Load(); err != nil {
+		t.Errorf("load after save: %v", err)
 	}
 }

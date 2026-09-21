@@ -516,3 +516,30 @@ func CreateNetwork(ctx context.Context, c *docker.Client, name string) tea.Cmd {
 		return c.CreateNetwork(ctx, name)
 	})
 }
+
+// RunContainer creates a container and starts it, which is what `docker run`
+// does and what the form in the images view asks for.
+func RunContainer(ctx context.Context, c *docker.Client, spec docker.RunSpec) tea.Cmd {
+	return safely("run", func() tea.Msg {
+		id, err := c.RunContainer(ctx, spec)
+		if err != nil {
+			return ActionDoneMsg{Label: "run " + spec.Image, Err: err, Refresh: true}
+		}
+
+		what := spec.Name
+		if what == "" {
+			what = docker.ShortID(id)
+		}
+		label := "created " + what
+		if spec.Start {
+			label = "started " + what
+		}
+		return ActionDoneMsg{Label: label, Refresh: true}
+	})
+}
+
+// HasImage reports whether the host already holds a reference, so the caller
+// can pull before running rather than failing on a missing image.
+func HasImage(ctx context.Context, c *docker.Client, reference string) bool {
+	return c.HasImage(ctx, reference)
+}

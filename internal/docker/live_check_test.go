@@ -718,3 +718,83 @@ func hasVolume(volumes []Volume, name string) bool {
 	}
 	return false
 }
+
+// TestLiveRunContainer covers creating a container the way the form does, with
+// the parts people actually fill in.
+func TestLiveRunContainer(t *testing.T) {
+	c, ctx := live(t)
+
+	spec := RunSpec{
+		Image:         testImage,
+		Name:          "hublot-live-run",
+		Ports:         []string{"18080:80"},
+		Env:           []string{"HUBLOT=yes"},
+		Command:       []string{"sleep", "600"},
+		RestartPolicy: "unless-stopped",
+		Start:         true,
+	}
+
+	id, err := c.RunContainer(ctx, spec)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	t.Cleanup(func() { _ = c.RemoveContainer(context.Background(), id, true, true) })
+
+	detail, err := c.InspectContainer(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Name != "hublot-live-run" {
+		t.Errorf("name: got %q", detail.Name)
+	}
+	if detail.State != StateRunning {
+		t.Errorf("it should have been started: %q", detail.State)
+	}
+	if detail.RestartPolicy != "unless-stopped" {
+		t.Errorf("restart policy: got %q", detail.RestartPolicy)
+	}
+
+	var sawEnv bool
+	for _, e := range detail.Env {
+		if e == "HUBLOT=yes" {
+			sawEnv = true
+		}
+	}
+	if !sawEnv {
+		t.Errorf("the environment did not reach the container: %v", detail.Env)
+	}
+
+	list, err := c.ListContainers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ct := range list {
+		if ct.ID != id {
+			continue
+		}
+		if len(ct.Ports) == 0 {
+			t.Error("the published port is not reported")
+		}
+	}
+
+	// Created but not started is the other half of the form.
+	stopped, err := c.RunContainer(ctx, RunSpec{
+		Image: testImage, Name: "hublot-live-created", Command: []string{"true"},
+	})
+	if err != nil {
+		t.Fatalf("create without starting: %v", err)
+	}
+	t.Cleanup(func() { _ = c.RemoveContainer(context.Background(), stopped, true, true) })
+
+	if state := stateOf(t, c, ctx, stopped); state != StateCreated {
+		t.Errorf("a container created without start is %q, want created", state)
+	}
+
+	// An image nothing could resolve has to fail as an error, not a panic.
+	if _, err := c.RunContainer(ctx, RunSpec{Image: "hublot-no-such-image:v0"}); err == nil {
+		t.Error("an unknown image must be refused")
+	}
+	if _, err := c.RunContainer(ctx, RunSpec{}); err == nil {
+		t.Error("a spec with no image must be refused")
+	}
+}

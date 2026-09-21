@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/RobinHil/hublot/internal/ui/theme"
 )
@@ -55,7 +56,16 @@ type TaskPanel struct {
 	tasks    []Task
 	cursor   int
 	viewport viewport.Model
-	Visible  bool
+	// follow keeps a running task's output pinned to the newest line, and is
+	// dropped the moment the user scrolls: output arriving every few
+	// milliseconds must not yank the screen back from what is being read.
+	follow bool
+	// dirty says output has arrived since the last layout. Wrapping a task's
+	// whole output costs a pass over every line of it, and a build prints
+	// faster than the screen refreshes, so it is done once before drawing
+	// rather than once per line.
+	dirty   bool
+	Visible bool
 
 	width  int
 	height int
@@ -63,7 +73,7 @@ type TaskPanel struct {
 
 // NewTaskPanel builds an empty panel.
 func NewTaskPanel() TaskPanel {
-	return TaskPanel{viewport: viewport.New(80, 10)}
+	return TaskPanel{viewport: viewport.New(80, 10), follow: true}
 }
 
 // SetSize records the space available.
@@ -74,6 +84,8 @@ func (p *TaskPanel) SetSize(width, height int) {
 	if p.viewport.Height < 3 {
 		p.viewport.Height = 3
 	}
+	// The output is wrapped to the width, so a resize has to rewrap it.
+	p.syncViewport()
 }
 
 // Start registers a task and shows nothing: the panel only opens on demand or
@@ -90,18 +102,20 @@ func (p *TaskPanel) Start(id, title, command string) {
 	p.syncViewport()
 }
 
-// Append adds an output line to a task.
+// Append adds an output line to a task. It is sanitised on the way in: this is
+// the output of a command that prints whatever the daemon and the images have
+// to say.
 func (p *TaskPanel) Append(id, line string) {
 	for i := range p.tasks {
 		if p.tasks[i].ID != id {
 			continue
 		}
-		p.tasks[i].Output = append(p.tasks[i].Output, line)
+		p.tasks[i].Output = append(p.tasks[i].Output, Sanitize(line))
 		if len(p.tasks[i].Output) > maxTaskLines {
 			p.tasks[i].Output = p.tasks[i].Output[len(p.tasks[i].Output)-maxTaskLines:]
 		}
 		if i == p.cursor {
-			p.syncViewport()
+			p.dirty = true
 		}
 		return
 	}
@@ -130,6 +144,17 @@ func (p *TaskPanel) Finish(id string, exitCode int, err error) bool {
 	return false
 }
 
+// Output is what a task printed, for whatever wants to read it back. A failure
+// is explained from it rather than from the exit code alone.
+func (p *TaskPanel) Output(id string) string {
+	for _, t := range p.tasks {
+		if t.ID == id {
+			return strings.Join(t.Output, "\n")
+		}
+	}
+	return ""
+}
+
 // Running counts the tasks still going, for the status bar.
 func (p *TaskPanel) Running() int {
 	n := 0
@@ -152,10 +177,20 @@ func (p *TaskPanel) HasFailure() bool {
 }
 
 // Toggle opens or closes the panel.
-func (p *TaskPanel) Toggle() { p.Visible = !p.Visible }
+func (p *TaskPanel) Toggle() {
+	p.Visible = !p.Visible
+	if p.Visible {
+		// Opening it shows the newest output, whatever was being read last
+		// time it was open.
+		p.follow = true
+		p.syncViewport()
+	}
+}
 
 // Update handles scrolling and task selection while the panel is open.
 func (p *TaskPanel) Update(msg tea.Msg) tea.Cmd {
+	p.sync()
+
 	km, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return nil
@@ -163,22 +198,53 @@ func (p *TaskPanel) Update(msg tea.Msg) tea.Cmd {
 
 	switch km.String() {
 	case "up", "k":
-		p.viewport.ScrollUp(1)
+		p.scrollBy(-1)
 	case "down", "j":
-		p.viewport.ScrollDown(1)
+		p.scrollBy(1)
 	case "left", "h":
 		p.selectTask(-1)
 	case "right", "l":
 		p.selectTask(1)
 	case "pgup":
 		p.viewport.HalfPageUp()
+		p.follow = p.viewport.AtBottom()
 	case "pgdown":
 		p.viewport.HalfPageDown()
+		p.follow = p.viewport.AtBottom()
+	case "home", "g":
+		p.follow = false
+		p.viewport.GotoTop()
+	case "end", "G":
+		p.follow = true
+		p.viewport.GotoBottom()
 	}
 	return nil
 }
 
+// Wheel scrolls the output, so the mouse works over the task panel the way it
+// does over the list and the side panel.
+func (p *TaskPanel) Wheel(up bool) {
+	p.sync()
+	if up {
+		p.scrollBy(-wheelLines)
+		return
+	}
+	p.scrollBy(wheelLines)
+}
+
+// scrollBy moves the output and decides whether the newest line is still being
+// followed, which is what having scrolled to the bottom means.
+func (p *TaskPanel) scrollBy(delta int) {
+	if delta < 0 {
+		p.viewport.ScrollUp(-delta)
+	} else {
+		p.viewport.ScrollDown(delta)
+	}
+	p.follow = p.viewport.AtBottom()
+}
+
 func (p *TaskPanel) selectTask(delta int) {
+	p.follow = true
 	p.cursor += delta
 	if p.cursor >= len(p.tasks) {
 		p.cursor = len(p.tasks) - 1
@@ -194,12 +260,44 @@ func (p *TaskPanel) syncViewport() {
 		p.viewport.SetContent("")
 		return
 	}
-	p.viewport.SetContent(strings.Join(p.tasks[p.cursor].Output, "\n"))
-	p.viewport.GotoBottom()
+
+	// Wrapped, not cut. What a failing command has to say is usually at the
+	// end of a long line: "port is already allocated" sits behind sixty
+	// characters of endpoint id, and cutting the line hides the only part that
+	// explains anything.
+	width := p.viewport.Width
+	if width < 20 {
+		width = 20
+	}
+
+	var b strings.Builder
+	for i, line := range p.tasks[p.cursor].Output {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(ansi.Wrap(line, width, ""))
+	}
+
+	// Setting the content leaves the offset alone, so what is being read stays
+	// put; only a panel still following the output jumps to the new end.
+	p.viewport.SetContent(b.String())
+	if p.follow {
+		p.viewport.GotoBottom()
+	}
 }
 
 // View renders the panel.
+// sync lays out whatever has arrived since the last frame.
+func (p *TaskPanel) sync() {
+	if !p.dirty {
+		return
+	}
+	p.dirty = false
+	p.syncViewport()
+}
+
 func (p *TaskPanel) View() string {
+	p.sync()
 	s := theme.Current()
 
 	if len(p.tasks) == 0 {

@@ -17,11 +17,13 @@ PKGVER  := $(shell printf '%s' "$(VERSION)" | sed -e 's/^v//' -e 'y/-/./' -e 's/
 ARCH    := $(shell go env GOARCH)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 DIST    := dist
+# Where install-user puts things: no root, and first in PATH on most setups.
+USER_PREFIX := $(HOME)/.local
 
 # No cgo, so the packages install on any glibc.
 export CGO_ENABLED := 0
 
-.PHONY: all build install test lint fmt vet man icons licenses clean dist deb rpm appimage tarball aur-checksums help
+.PHONY: all build install install-user uninstall-user test lint fmt vet man icons licenses clean dist deb rpm appimage arch tarball aur-checksums help
 
 all: build
 
@@ -33,6 +35,41 @@ build:
 ## install: install the binary into GOBIN, without the launcher or the man page
 install:
 	go install -trimpath -ldflags "$(LDFLAGS)" ./cmd/$(BINARY)
+
+## install-user: install for the current user only, under ~/.local, no root
+install-user: build man licenses
+	install -Dm755 $(DIST)/$(BINARY) $(USER_PREFIX)/bin/$(BINARY)
+	install -Dm644 man/$(BINARY).1 $(USER_PREFIX)/share/man/man1/$(BINARY).1
+	install -Dm644 LICENSE $(USER_PREFIX)/share/licenses/$(BINARY)/LICENSE
+	install -Dm644 $(DIST)/THIRD-PARTY-LICENSES.txt \
+		$(USER_PREFIX)/share/licenses/$(BINARY)/THIRD-PARTY-LICENSES.txt
+	install -Dm644 packaging/$(BINARY).desktop \
+		$(USER_PREFIX)/share/applications/$(BINARY).desktop
+	install -Dm644 packaging/icons/$(BINARY).svg \
+		$(USER_PREFIX)/share/icons/hicolor/scalable/apps/$(BINARY).svg
+	@for size in 16 24 32 48 64 128 256; do \
+		install -Dm644 "packaging/icons/$(BINARY)-$$size.png" \
+			"$(USER_PREFIX)/share/icons/hicolor/$${size}x$${size}/apps/$(BINARY).png" || exit 1; \
+	done
+	@command -v update-desktop-database >/dev/null 2>&1 && \
+		update-desktop-database $(USER_PREFIX)/share/applications || true
+	@command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+		gtk-update-icon-cache -q -t -f $(USER_PREFIX)/share/icons/hicolor || true
+	@echo
+	@echo "installed to $(USER_PREFIX)/bin/$(BINARY)"
+	@echo "this takes precedence over a system package when ~/.local/bin comes first in PATH"
+
+## uninstall-user: remove what install-user put in ~/.local
+uninstall-user:
+	rm -f $(USER_PREFIX)/bin/$(BINARY)
+	rm -f $(USER_PREFIX)/share/man/man1/$(BINARY).1
+	rm -rf $(USER_PREFIX)/share/licenses/$(BINARY)
+	rm -f $(USER_PREFIX)/share/applications/$(BINARY).desktop
+	rm -f $(USER_PREFIX)/share/icons/hicolor/scalable/apps/$(BINARY).svg
+	@for size in 16 24 32 48 64 128 256; do \
+		rm -f "$(USER_PREFIX)/share/icons/hicolor/$${size}x$${size}/apps/$(BINARY).png"; \
+	done
+	@echo "removed from $(USER_PREFIX); a system package, if any, is untouched"
 
 ## test: run the test suite
 test:
@@ -113,6 +150,36 @@ appimage: build man licenses
 		$(DIST)/AppDir/usr/share/licenses/$(BINARY)/THIRD-PARTY-LICENSES.txt
 	install -Dm755 packaging/appimage/AppRun $(DIST)/AppDir/AppRun
 	ARCH=$$(uname -m) appimagetool $(DIST)/AppDir $(DIST)/$(BINARY)-$(PKGVER)-$$(uname -m).AppImage
+
+## arch: build the Arch package from the working tree into dist/
+#
+# Deliberately not part of `dist`: a binary Arch package is linked against the
+# day's rolling libraries, so it is built and installed to prove the recipe
+# works, never published (AGENTS.md section 18).
+arch:
+	@command -v makepkg >/dev/null 2>&1 || { \
+		echo "makepkg comes with pacman: this target only runs on Arch"; exit 1; }
+	rm -rf $(DIST)/aur
+	@mkdir -p $(DIST)/aur/$(BINARY)-$(PKGVER)
+	# The published PKGBUILD fetches a released tag, which is right for an AUR
+	# user and wrong here: it would package the last release and ignore
+	# everything written since. So the tarball it unpacks is made from the
+	# working tree, uncommitted and untracked files included, because the whole
+	# point of building locally is to install what is on disk right now.
+	# Only pkgver and the source line differ from what the AUR carries;
+	# build(), check() and package() run byte for byte.
+	git ls-files -z --cached --others --exclude-standard \
+		| tar --null -T - -cf - \
+		| tar -xf - -C $(DIST)/aur/$(BINARY)-$(PKGVER)
+	tar -czf $(DIST)/aur/$(BINARY)-$(PKGVER).tar.gz \
+		-C $(DIST)/aur $(BINARY)-$(PKGVER)
+	sed -e 's|^pkgver=.*|pkgver=$(PKGVER)|' \
+	    -e 's|^source=.*|source=("$$pkgname-$$pkgver.tar.gz")|' \
+		packaging/aur/PKGBUILD > $(DIST)/aur/PKGBUILD
+	cd $(DIST)/aur && makepkg --force --noconfirm
+	mv $(DIST)/aur/$(BINARY)-$(PKGVER)-*.pkg.tar.zst $(DIST)/
+	@echo
+	@echo "install it with: sudo pacman -U $(DIST)/$(BINARY)-$(PKGVER)-*.pkg.tar.zst"
 
 ## tarball: produce the source tarball the PKGBUILD consumes
 tarball:

@@ -178,6 +178,32 @@ func (v *Images) Update(msg tea.Msg) tea.Cmd {
 	case key.Matches(km, k.Force):
 		return v.removeConfirm(true)
 
+	case key.Matches(km, k.Run):
+		if v.deps.ReadOnly {
+			return denied()
+		}
+		reference := ""
+		if hasCurrent && !img.Dangling() {
+			reference = img.Ref()
+		}
+		return request(RunFormRequest(v.deps, reference))
+
+	case key.Matches(km, k.Fetch):
+		if v.deps.ReadOnly {
+			return denied()
+		}
+		return request(PromptRequest{
+			Title: "Pull an image",
+			Body: []string{
+				"A reference such as nginx:alpine or ghcr.io/owner/name:tag.",
+				"Progress goes to the task panel, which t opens.",
+			},
+			Label: "reference: ",
+			Run: func(reference string) tea.Cmd {
+				return request(PullRequest{Ref: reference})
+			},
+		})
+
 	case key.Matches(km, k.Palette):
 		if !hasCurrent {
 			return nil
@@ -226,7 +252,7 @@ func (v *Images) palette(img docker.Image) tea.Cmd {
 					Label:   "path: ",
 					Initial: "./",
 					Run: func(path string) tea.Cmd {
-						return cmds.LoadImage(v.deps.Ctx, v.deps.Client, path)
+						return cmds.LoadImage(v.deps.Ctx, v.deps.Client, state.HomePath(path))
 					},
 				})
 			},
@@ -240,7 +266,8 @@ func (v *Images) palette(img docker.Image) tea.Cmd {
 					Label:   "path: ",
 					Initial: defaultSavePath(img),
 					Run: func(path string) tea.Cmd {
-						return cmds.SaveImage(v.deps.Ctx, v.deps.Client, img.ID, img.Ref(), path)
+						return cmds.SaveImage(v.deps.Ctx, v.deps.Client, img.ID, img.Ref(),
+							state.HomePath(path))
 					},
 				})
 			},
@@ -381,11 +408,45 @@ func (v *Images) removeConfirm(force bool) tea.Cmd {
 func (v *Images) Hints() []key.Binding {
 	k := v.deps.Keys
 	return []key.Binding{
-		k.Global.Help, k.Global.Filter, k.Global.Mark, k.Global.Sort,
-		k.Images.Detail, k.Images.History, k.Images.Pull,
-		k.Images.Remove, k.Images.Force, k.Global.Quit,
+		k.Images.Run, k.Images.Fetch, k.Images.Detail, k.Images.History,
+		k.Images.Pull, k.Images.Remove, k.Images.Palette,
+		k.Global.Filter, k.Global.Help, k.Global.Quit,
 	}
 }
 
 // Filtering reports whether the filter input has focus.
 func (v *Images) Filtering() bool { return v.table.Filtering() }
+
+// Summary is what the images cost and how much of that is unused.
+func (v *Images) Summary() string {
+	used := v.usage()
+
+	var total, reclaimable int64
+	var unused, dangling int
+	for _, img := range v.deps.Store.Images {
+		total += img.Size
+		if used[img.ID] == 0 {
+			unused++
+			reclaimable += img.Size
+		}
+		if img.Dangling() {
+			dangling++
+		}
+	}
+
+	unusedPart := ""
+	if unused > 0 {
+		unusedPart = fmt.Sprintf("%d unused, %s", unused, state.FormatBytes(reclaimable))
+	}
+	danglingPart := ""
+	if dangling > 0 {
+		danglingPart = fmt.Sprintf("%d dangling", dangling)
+	}
+
+	return summaryOf(
+		plural(len(v.deps.Store.Images), "image"),
+		state.FormatBytes(total),
+		unusedPart,
+		danglingPart,
+	)
+}

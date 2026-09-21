@@ -32,8 +32,11 @@ var DefaultShellCommand = []string{
 type ExecSession struct {
 	client      *Client
 	containerID string
-	cmd         []string
-	user        string
+	// Name is what the container is called, for the line printed above the
+	// shell. It is cosmetic and may be empty.
+	Name string
+	cmd  []string
+	user string
 
 	stdin  io.Reader
 	stdout io.Writer
@@ -82,6 +85,10 @@ func (s *ExecSession) Run() (err error) {
 			err = fmt.Errorf("exec session panicked: %v", r)
 		}
 	}()
+
+	// A screen of its own, so the shell does not open on top of whatever was
+	// in the terminal before hublot started.
+	defer ownScreen(s.stdout, s.Name)()
 
 	width, height := terminalSize(s.stdout)
 
@@ -135,6 +142,36 @@ func (s *ExecSession) Run() (err error) {
 		s.ExitCode = insp.ExitCode
 	}
 	return nil
+}
+
+// ownScreen puts the session on the terminal's alternate buffer and takes it
+// off again afterwards. Bubble Tea gives the terminal back as it found it
+// before an exec, which means the shell would otherwise start underneath the
+// scrollback of whatever ran there earlier, and leave its own behind on the
+// way out.
+//
+// This is the same buffer every full screen program uses, so nothing outside
+// is touched: what was on the screen before comes back untouched, scrollback
+// included.
+func ownScreen(w io.Writer, name string) func() {
+	f, ok := w.(*os.File)
+	if !ok || !xterm.IsTerminal(f.Fd()) {
+		return func() {}
+	}
+
+	// 1049h switches to the alternate buffer and saves the cursor, then the
+	// screen is cleared and the cursor put home: some terminals leave the old
+	// contents in the alternate buffer.
+	// A terminal that will not take these is a terminal the session is about to
+	// fail on anyway, and there is nowhere to report it from here.
+	_, _ = fmt.Fprint(w, "\x1b[?1049h\x1b[H\x1b[2J")
+	if name != "" {
+		// Dim, one line, above the shell's own first prompt: the prompt inside
+		// a container is usually just a "#" and says nothing about where it is.
+		_, _ = fmt.Fprintf(w, "\x1b[2mhublot: a shell in %s, exit or ctrl-d to come back\x1b[0m\r\n", name)
+	}
+
+	return func() { _, _ = fmt.Fprint(w, "\x1b[?1049l") }
 }
 
 // watchResize forwards SIGWINCH to the daemon so the remote pty follows the

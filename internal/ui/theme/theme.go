@@ -1,81 +1,126 @@
 // Package theme holds every colour and style used by the UI. It is the one
 // place in the codebase allowed a package-level variable
 // (AGENTS.md section 15).
+//
+// The palette has a job to do rather than a mood: chrome recedes, data reads
+// first, and colour only ever means something. Green is healthy, amber is
+// attention, red is broken or destructive, blue is where you are. Everything
+// else is one of three greys.
 package theme
 
 import "github.com/charmbracelet/lipgloss"
 
-// Palette is the set of colours a theme defines. Terminal-default adaptive
-// colours are used so hublot looks right on light and dark backgrounds alike.
+// Palette is the set of colours a theme defines. Adaptive so a light terminal
+// gets ink on paper rather than the same values washed out.
 type Palette struct {
-	Text      lipgloss.AdaptiveColor
-	Dim       lipgloss.AdaptiveColor
+	// Text is the foreground for data that matters.
+	Text lipgloss.AdaptiveColor
+	// Muted is for secondary data: units, ages, counts.
+	Muted lipgloss.AdaptiveColor
+	// Faint is for chrome: rules, inactive tabs, placeholders.
+	Faint lipgloss.AdaptiveColor
+
 	Accent    lipgloss.AdaptiveColor
-	Running   lipgloss.AdaptiveColor
-	Stopped   lipgloss.AdaptiveColor
-	Warning   lipgloss.AdaptiveColor
-	Danger    lipgloss.AdaptiveColor
+	AccentDim lipgloss.AdaptiveColor
+
+	Running lipgloss.AdaptiveColor
+	Warning lipgloss.AdaptiveColor
+	Danger  lipgloss.AdaptiveColor
+
+	// Selection is the background of the row under the cursor.
 	Selection lipgloss.AdaptiveColor
+	// SelectionText keeps that row readable on it.
+	SelectionText lipgloss.AdaptiveColor
+	// Marked tints rows picked for a batch action.
+	Marked lipgloss.AdaptiveColor
+
 	Border    lipgloss.AdaptiveColor
+	BorderLit lipgloss.AdaptiveColor
 	Surface   lipgloss.AdaptiveColor
+
+	// Gauge is the three-stop ramp meters and sparklines climb.
+	GaugeLow  lipgloss.AdaptiveColor
+	GaugeMid  lipgloss.AdaptiveColor
+	GaugeHigh lipgloss.AdaptiveColor
 }
 
 // Styles are the derived lipgloss styles the views render with.
 type Styles struct {
 	Palette Palette
 
-	Tab         lipgloss.Style
-	TabActive   lipgloss.Style
-	TabBar      lipgloss.Style
+	Tab       lipgloss.Style
+	TabActive lipgloss.Style
+	TabKey    lipgloss.Style
+
 	Header      lipgloss.Style
+	HeaderSort  lipgloss.Style
 	Row         lipgloss.Style
 	RowSelected lipgloss.Style
 	RowMarked   lipgloss.Style
-	Dim         lipgloss.Style
-	Accent      lipgloss.Style
-	Running     lipgloss.Style
-	Stopped     lipgloss.Style
-	Warning     lipgloss.Style
-	Danger      lipgloss.Style
+
+	Text    lipgloss.Style
+	Dim     lipgloss.Style
+	Faint   lipgloss.Style
+	Accent  lipgloss.Style
+	Running lipgloss.Style
+	Warning lipgloss.Style
+	Danger  lipgloss.Style
+
 	Badge       lipgloss.Style
 	BadgeDanger lipgloss.Style
-	StatusBar   lipgloss.Style
+	BadgeGood   lipgloss.Style
+
+	Panel        lipgloss.Style
+	PanelFocused lipgloss.Style
+	PanelTitle   lipgloss.Style
+
 	Modal       lipgloss.Style
 	ModalDanger lipgloss.Style
 	Title       lipgloss.Style
 	Key         lipgloss.Style
 	Help        lipgloss.Style
+	Rule        lipgloss.Style
 }
 
-// current is the active theme. Views read it through Current.
 var current = New(Default())
 
 // Default is the palette used when the config names no other.
 func Default() Palette {
 	return Palette{
-		Text:      lipgloss.AdaptiveColor{Light: "#1f2328", Dark: "#e6edf3"},
-		Dim:       lipgloss.AdaptiveColor{Light: "#656d76", Dark: "#8b949e"},
-		Accent:    lipgloss.AdaptiveColor{Light: "#0969da", Dark: "#58a6ff"},
-		Running:   lipgloss.AdaptiveColor{Light: "#1a7f37", Dark: "#3fb950"},
-		Stopped:   lipgloss.AdaptiveColor{Light: "#656d76", Dark: "#6e7681"},
-		Warning:   lipgloss.AdaptiveColor{Light: "#9a6700", Dark: "#d29922"},
-		Danger:    lipgloss.AdaptiveColor{Light: "#cf222e", Dark: "#f85149"},
-		Selection: lipgloss.AdaptiveColor{Light: "#ddf4ff", Dark: "#1f3a5f"},
-		Border:    lipgloss.AdaptiveColor{Light: "#d0d7de", Dark: "#30363d"},
-		Surface:   lipgloss.AdaptiveColor{Light: "#f6f8fa", Dark: "#161b22"},
+		Text:          lipgloss.AdaptiveColor{Light: "#12161b", Dark: "#e7eef6"},
+		Muted:         lipgloss.AdaptiveColor{Light: "#5b6572", Dark: "#9aa6b4"},
+		Faint:         lipgloss.AdaptiveColor{Light: "#98a2b0", Dark: "#5c6675"},
+		Accent:        lipgloss.AdaptiveColor{Light: "#0b66d0", Dark: "#63b3ff"},
+		AccentDim:     lipgloss.AdaptiveColor{Light: "#3d87e0", Dark: "#3c6ea5"},
+		Running:       lipgloss.AdaptiveColor{Light: "#127a3a", Dark: "#49c96d"},
+		Warning:       lipgloss.AdaptiveColor{Light: "#9a6207", Dark: "#e3a92a"},
+		Danger:        lipgloss.AdaptiveColor{Light: "#c62b30", Dark: "#ff6b63"},
+		Selection:     lipgloss.AdaptiveColor{Light: "#d7e7fb", Dark: "#1d3a5f"},
+		SelectionText: lipgloss.AdaptiveColor{Light: "#0a1420", Dark: "#f2f7fd"},
+		Marked:        lipgloss.AdaptiveColor{Light: "#eaf2ff", Dark: "#16233a"},
+		Border:        lipgloss.AdaptiveColor{Light: "#d3dae3", Dark: "#2a323d"},
+		BorderLit:     lipgloss.AdaptiveColor{Light: "#0b66d0", Dark: "#3c6ea5"},
+		Surface:       lipgloss.AdaptiveColor{Light: "#f2f5f9", Dark: "#141a22"},
+		GaugeLow:      lipgloss.AdaptiveColor{Light: "#127a3a", Dark: "#49c96d"},
+		GaugeMid:      lipgloss.AdaptiveColor{Light: "#9a6207", Dark: "#e3a92a"},
+		GaugeHigh:     lipgloss.AdaptiveColor{Light: "#c62b30", Dark: "#ff6b63"},
 	}
 }
 
-// Mono is a palette for terminals where colour is unwanted or unreadable.
+// Mono is for terminals where colour is unwanted or unreadable.
 func Mono() Palette {
-	white := lipgloss.AdaptiveColor{Light: "#000000", Dark: "#ffffff"}
-	grey := lipgloss.AdaptiveColor{Light: "#666666", Dark: "#999999"}
+	ink := lipgloss.AdaptiveColor{Light: "#000000", Dark: "#ffffff"}
+	mid := lipgloss.AdaptiveColor{Light: "#555555", Dark: "#aaaaaa"}
+	low := lipgloss.AdaptiveColor{Light: "#888888", Dark: "#777777"}
+	sel := lipgloss.AdaptiveColor{Light: "#dddddd", Dark: "#333333"}
+
 	return Palette{
-		Text: white, Dim: grey, Accent: white, Running: white, Stopped: grey,
-		Warning: white, Danger: white,
-		Selection: lipgloss.AdaptiveColor{Light: "#dddddd", Dark: "#333333"},
-		Border:    grey,
-		Surface:   lipgloss.AdaptiveColor{Light: "#eeeeee", Dark: "#222222"},
+		Text: ink, Muted: mid, Faint: low,
+		Accent: ink, AccentDim: mid,
+		Running: ink, Warning: mid, Danger: ink,
+		Selection: sel, SelectionText: ink, Marked: sel,
+		Border: low, BorderLit: mid, Surface: sel,
+		GaugeLow: low, GaugeMid: mid, GaugeHigh: ink,
 	}
 }
 
@@ -90,26 +135,41 @@ func ByName(name string) Palette {
 // New derives the styles of a palette.
 func New(p Palette) Styles {
 	return Styles{
-		Palette:     p,
-		Tab:         lipgloss.NewStyle().Foreground(p.Dim).Padding(0, 1),
-		TabActive:   lipgloss.NewStyle().Foreground(p.Accent).Bold(true).Underline(true).Padding(0, 1),
-		TabBar:      lipgloss.NewStyle().Foreground(p.Dim),
-		Header:      lipgloss.NewStyle().Foreground(p.Dim).Bold(true),
+		Palette: p,
+
+		Tab:       lipgloss.NewStyle().Foreground(p.Faint).Padding(0, 1),
+		TabActive: lipgloss.NewStyle().Foreground(p.Accent).Bold(true).Padding(0, 1),
+		TabKey:    lipgloss.NewStyle().Foreground(p.AccentDim),
+
+		Header:      lipgloss.NewStyle().Foreground(p.Muted).Bold(true),
+		HeaderSort:  lipgloss.NewStyle().Foreground(p.Accent).Bold(true),
 		Row:         lipgloss.NewStyle().Foreground(p.Text),
-		RowSelected: lipgloss.NewStyle().Foreground(p.Text).Background(p.Selection).Bold(true),
-		RowMarked:   lipgloss.NewStyle().Foreground(p.Accent).Bold(true),
-		Dim:         lipgloss.NewStyle().Foreground(p.Dim),
-		Accent:      lipgloss.NewStyle().Foreground(p.Accent),
-		Running:     lipgloss.NewStyle().Foreground(p.Running),
-		Stopped:     lipgloss.NewStyle().Foreground(p.Stopped),
-		Warning:     lipgloss.NewStyle().Foreground(p.Warning),
-		Danger:      lipgloss.NewStyle().Foreground(p.Danger),
-		Badge:       lipgloss.NewStyle().Foreground(p.Text).Background(p.Surface).Padding(0, 1),
+		RowSelected: lipgloss.NewStyle().Foreground(p.SelectionText).Background(p.Selection),
+		RowMarked:   lipgloss.NewStyle().Foreground(p.Text).Background(p.Marked),
+
+		Text:    lipgloss.NewStyle().Foreground(p.Text),
+		Dim:     lipgloss.NewStyle().Foreground(p.Muted),
+		Faint:   lipgloss.NewStyle().Foreground(p.Faint),
+		Accent:  lipgloss.NewStyle().Foreground(p.Accent),
+		Running: lipgloss.NewStyle().Foreground(p.Running),
+		Warning: lipgloss.NewStyle().Foreground(p.Warning),
+		Danger:  lipgloss.NewStyle().Foreground(p.Danger),
+
+		Badge:       lipgloss.NewStyle().Foreground(p.Muted).Background(p.Surface).Padding(0, 1),
 		BadgeDanger: lipgloss.NewStyle().Foreground(p.Danger).Bold(true).Padding(0, 1),
-		StatusBar:   lipgloss.NewStyle().Foreground(p.Dim),
+		BadgeGood:   lipgloss.NewStyle().Foreground(p.Running).Padding(0, 1),
+
+		Panel: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder(), false, false, false, true).
+			BorderForeground(p.Border),
+		PanelFocused: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder(), false, false, false, true).
+			BorderForeground(p.BorderLit),
+		PanelTitle: lipgloss.NewStyle().Foreground(p.Accent).Bold(true),
+
 		Modal: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(p.Accent).
+			BorderForeground(p.BorderLit).
 			Padding(1, 2),
 		ModalDanger: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -117,7 +177,8 @@ func New(p Palette) Styles {
 			Padding(1, 2),
 		Title: lipgloss.NewStyle().Foreground(p.Accent).Bold(true),
 		Key:   lipgloss.NewStyle().Foreground(p.Accent).Bold(true),
-		Help:  lipgloss.NewStyle().Foreground(p.Dim),
+		Help:  lipgloss.NewStyle().Foreground(p.Muted),
+		Rule:  lipgloss.NewStyle().Foreground(p.Border),
 	}
 }
 
@@ -133,11 +194,25 @@ func StateStyle(state string) lipgloss.Style {
 	switch state {
 	case "running":
 		return s.Running
-	case "paused", "restarting":
+	case "paused", "restarting", "created":
 		return s.Warning
 	case "dead":
 		return s.Danger
 	default:
-		return s.Stopped
+		return s.Faint
+	}
+}
+
+// LevelStyle colours a figure by how loaded it is: quiet reads calm, busy
+// reads hot, so a glance at a column is enough.
+func LevelStyle(percent float64) lipgloss.Style {
+	s := Current()
+	switch {
+	case percent >= 80:
+		return lipgloss.NewStyle().Foreground(s.Palette.GaugeHigh)
+	case percent >= 40:
+		return lipgloss.NewStyle().Foreground(s.Palette.GaugeMid)
+	default:
+		return lipgloss.NewStyle().Foreground(s.Palette.GaugeLow)
 	}
 }

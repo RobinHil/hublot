@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/RobinHil/hublot/internal/compose"
 	"github.com/RobinHil/hublot/internal/docker"
@@ -16,37 +16,59 @@ import (
 	"github.com/RobinHil/hublot/internal/ui/theme"
 )
 
-// sparkWidth is how many samples of history the memory column shows.
-const sparkWidth = 8
+// graphTier is how much room the graphics get, which follows the width of the
+// terminal: the figures matter more than the pictures, so the pictures shrink
+// first and disappear before a number is ever cut.
+type graphTier struct {
+	meter, spark   int
+	cpuCol, memCol int
+}
+
+func tierFor(width int) graphTier {
+	switch {
+	case width >= 118:
+		return graphTier{meter: 6, spark: 8, cpuCol: 13, memCol: 18}
+	case width >= 96:
+		return graphTier{meter: 5, spark: 5, cpuCol: 12, memCol: 14}
+	case width >= 78:
+		return graphTier{meter: 4, spark: 0, cpuCol: 11, memCol: 8}
+	default:
+		return graphTier{meter: 0, spark: 0, cpuCol: 6, memCol: 7}
+	}
+}
 
 // Containers is the default view: every container with its live stats.
 type Containers struct {
 	base
-	// detail holds inspect output when the pane is open.
-	detail     viewport.Model
-	detailOpen bool
-	detailFor  string
 }
 
 // NewContainers builds the containers view.
 func NewContainers(d Deps) *Containers {
-	cols := []components.Column{
-		{Title: "NAME", SortKey: "name", MinWidth: 14},
-		{Title: "IMAGE", SortKey: "image", MinWidth: 12, Priority: 3},
-		{Title: "CPU", SortKey: "cpu", Width: 11, Right: true},
-		{Title: "MEM", SortKey: "mem", Width: 18, Right: true},
-		{Title: "NET I/O", Width: 15, Right: true, Priority: 4},
-		{Title: "STATUS", SortKey: "state", Width: 18, Priority: 1},
-		{Title: "PORTS", Width: 16, Priority: 5},
-		{Title: "PROJECT", SortKey: "project", Width: 14, Priority: 2},
-	}
-
-	t := components.NewTable(cols)
+	t := components.NewTable(containerColumns(tierFor(0)))
 	t.Empty = "no containers on this host"
 
-	v := &Containers{base: base{deps: d, table: t}}
-	v.detail = viewport.New(80, 10)
-	return v
+	return &Containers{base: base{deps: d, table: t}}
+}
+
+// containerColumns builds the column set for a width tier.
+func containerColumns(tier graphTier) []components.Column {
+	return []components.Column{
+		{Title: "NAME", SortKey: "name", MinWidth: 16},
+		{Title: "IMAGE", SortKey: "image", MinWidth: 12, Priority: 3},
+		{Title: "CPU", SortKey: "cpu", Width: tier.cpuCol, Right: tier.meter == 0},
+		{Title: "MEM", SortKey: "mem", Width: tier.memCol, Right: tier.spark == 0},
+		{Title: "NET I/O", Width: 14, Right: true, Priority: 4},
+		{Title: "STATUS", SortKey: "state", Width: 14, Priority: 1},
+		{Title: "PORTS", Width: 14, Priority: 5},
+		{Title: "PROJECT", SortKey: "project", Width: 13, Priority: 2},
+	}
+}
+
+// SetSize re-tiers the graphics before handing the space to the table.
+func (v *Containers) SetSize(width, height int) {
+	v.table.SetColumns(containerColumns(tierFor(width)))
+	v.base.SetSize(width, height)
+	v.Refresh()
 }
 
 // Title is the tab label.
@@ -70,58 +92,65 @@ func (v *Containers) Refresh() {
 }
 
 // row renders one container, mixing list data with the latest stats sample.
+// The graphics carry the reading: a meter for the instant, a sparkline for the
+// trend, both tinted by level so a column scans without being read.
 func (v *Containers) row(c docker.Container) components.Row {
 	s := theme.Current()
 	st, hasStats := v.deps.Store.Stats[c.ID]
 
-	cpu := formatCPU(st, hasStats)
-	if hasStats && st.CPUValid {
-		cpu = components.Bar(st.CPUPercent, 5) + " " + cpu
+	tier := tierFor(v.width)
+
+	cpu := components.Cell{Text: formatCPU(st, hasStats)}
+	// The bar is drawn for containers doing something. An empty meter on every
+	// idle row is texture, not information, and it buries the one row that is
+	// actually busy.
+	if hasStats && st.CPUValid && tier.meter > 0 && st.CPUPercent >= 1 {
+		cpu = components.Cell{
+			Text:  components.PlainMeter(st.CPUPercent, tier.meter) + " " + formatCPU(st, hasStats),
+			Style: styleOf(theme.LevelStyle(st.CPUPercent)),
+		}
+	} else if hasStats && st.CPUValid && tier.meter > 0 {
+		cpu = components.Cell{
+			Text:  strings.Repeat(" ", tier.meter) + " " + formatCPU(st, hasStats),
+			Style: styleOf(theme.Current().Dim),
+		}
 	}
 
-	mem := formatMem(st, hasStats)
-	if hist := v.deps.Store.MemHistory[c.ID]; len(hist) > 0 {
-		mem = components.Sparkline(hist, sparkWidth) + " " + mem
+	mem := components.Cell{Text: formatMem(st, hasStats)}
+	if hist := v.deps.Store.MemHistory[c.ID]; len(hist) > 0 && tier.spark > 0 {
+		mem = components.Cell{
+			Text:  components.Sparkline(hist, tier.spark) + " " + formatMem(st, hasStats),
+			Style: styleOf(theme.LevelStyle(st.MemPercent)),
+		}
 	}
 
 	return components.Row{
 		ID:  c.ID,
 		Dim: !c.Running(),
 		Cells: []components.Cell{
-			components.Txt(c.Name),
+			components.Cell{Text: stateDot(c.State) + " " + c.Name},
 			components.Txt(c.Image),
-			components.Txt(cpu),
-			components.Txt(mem),
-			components.Txt(formatIO(st.NetRx, st.NetTx)),
-			components.Styled(c.Status, theme.StateStyle(c.State)),
-			components.Txt(formatPorts(c.Ports)),
-			components.Styled(compose.ProjectOf(c.Labels), s.Accent),
+			cpu,
+			mem,
+			components.Styled(formatIO(st.NetRx, st.NetTx), s.Dim),
+			components.Styled(formatStatus(c), theme.StateStyle(c.State)),
+			components.Styled(formatPorts(c.Ports), s.Accent),
+			components.Styled(compose.ProjectOf(c.Labels), s.Dim),
 		},
 	}
 }
 
-// SetSize splits the area between the table and the detail pane.
-func (v *Containers) SetSize(width, height int) {
-	v.width, v.height = width, height
-	tableHeight := height
-	if v.detailOpen {
-		tableHeight = height / 2
-		v.detail.Width = width
-		v.detail.Height = height - tableHeight - 1
-	}
-	v.table.SetSize(width, tableHeight)
+// stateDot is the light at the head of every row: colour says running, paused
+// or gone before the word does.
+func stateDot(state string) string {
+	return theme.StateStyle(state).Render("●")
 }
+
+// styleOf adapts a style for a cell, which keeps its own pointer.
+func styleOf(st lipgloss.Style) *lipgloss.Style { return &st }
 
 // Update handles the view's own bindings once the table has had its turn.
 func (v *Containers) Update(msg tea.Msg) tea.Cmd {
-	if m, ok := msg.(cmds.InspectMsg); ok && strings.HasPrefix(m.Title, "container ") {
-		if m.Err == nil {
-			v.detail.SetContent(m.Content)
-			v.detail.GotoTop()
-		}
-		return nil
-	}
-
 	if cmd, handled := v.table.Update(msg, v.deps.Keys); handled {
 		v.Refresh()
 		return cmd
@@ -137,7 +166,16 @@ func (v *Containers) Update(msg tea.Msg) tea.Cmd {
 
 	switch {
 	case key.Matches(km, k.Detail):
-		return v.toggleDetail()
+		if !hasCurrent {
+			return nil
+		}
+		return request(DetailRequest{
+			Title:  "container " + current.Name,
+			Source: current.ID,
+			Load: func() tea.Cmd {
+				return cmds.InspectContainer(v.deps.Ctx, v.deps.Client, current.ID, current.Name)
+			},
+		})
 
 	case key.Matches(km, k.Logs):
 		if !hasCurrent {
@@ -158,6 +196,17 @@ func (v *Containers) Update(msg tea.Msg) tea.Cmd {
 			})
 		}
 		return request(ExecRequest{ContainerID: current.ID, Name: current.Name})
+
+	case key.Matches(km, k.Start):
+		return v.reversible("start", func(ids []string) tea.Cmd {
+			return cmds.StartContainers(v.deps.Ctx, v.deps.Client, ids)
+		})
+
+	case key.Matches(km, k.New):
+		if v.deps.ReadOnly {
+			return denied()
+		}
+		return request(RunFormRequest(v.deps, ""))
 
 	case key.Matches(km, k.Stop):
 		return v.reversible("stop", func(ids []string) tea.Cmd {
@@ -188,11 +237,6 @@ func (v *Containers) Update(msg tea.Msg) tea.Cmd {
 		return v.palette()
 	}
 
-	if v.detailOpen {
-		var cmd tea.Cmd
-		v.detail, cmd = v.detail.Update(msg)
-		return cmd
-	}
 	return nil
 }
 
@@ -356,11 +400,24 @@ func (v *Containers) palette() tea.Cmd {
 	}
 	targets := v.targets()
 
+	pauseLabel, pauseDetail := "pause", "freeze the container, leaving it in memory"
+	if current.State == docker.StatePaused {
+		pauseLabel = "unpause"
+		pauseDetail = "let it run again: a paused container cannot be started, only unpaused"
+	}
+
 	choices := []components.Choice{
 		{
 			Label: "start", Detail: "start the selected container(s)", Destructive: true,
 			Payload: func() tea.Cmd {
 				return cmds.StartContainers(v.deps.Ctx, v.deps.Client, ids(targets))
+			},
+		},
+		{
+			Label: pauseLabel, Detail: pauseDetail, Destructive: true,
+			Payload: func() tea.Cmd {
+				return cmds.PauseContainer(v.deps.Ctx, v.deps.Client, current.ID,
+					current.State == docker.StatePaused)
 			},
 		},
 		{
@@ -428,7 +485,8 @@ func (v *Containers) palette() tea.Cmd {
 					Label:   "path: ",
 					Initial: "./" + current.Name + ".tar",
 					Run: func(path string) tea.Cmd {
-						return cmds.Export(v.deps.Ctx, v.deps.Client, current.ID, current.Name, path)
+						return cmds.Export(v.deps.Ctx, v.deps.Client, current.ID, current.Name,
+							state.HomePath(path))
 					},
 				})
 			},
@@ -510,7 +568,8 @@ func (v *Containers) palette() tea.Cmd {
 								"Give the local path and the destination inside the container, separated by a space.",
 							})
 						}
-						return cmds.CopyIntoContainer(v.deps.Ctx, v.deps.Client, current.ID, local, remote)
+						return cmds.CopyIntoContainer(v.deps.Ctx, v.deps.Client, current.ID,
+							state.HomePath(local), remote)
 					},
 				})
 			},
@@ -534,7 +593,8 @@ func (v *Containers) palette() tea.Cmd {
 								"Give the path inside the container and a local directory, separated by a space.",
 							})
 						}
-						return cmds.CopyOutOfContainer(v.deps.Ctx, v.deps.Client, current.ID, remote, localDir)
+						return cmds.CopyOutOfContainer(v.deps.Ctx, v.deps.Client, current.ID,
+							remote, state.HomePath(localDir))
 					},
 				})
 			},
@@ -614,50 +674,36 @@ func (v *Containers) networkID(name string) string {
 	return ""
 }
 
-// toggleDetail opens or closes the inspect pane.
-func (v *Containers) toggleDetail() tea.Cmd {
-	current, ok := v.current()
-	if !ok {
-		return nil
-	}
-
-	if v.detailOpen && v.detailFor == current.ID {
-		v.detailOpen = false
-		v.SetSize(v.width, v.height)
-		return nil
-	}
-
-	v.detailOpen = true
-	v.detailFor = current.ID
-	v.detail.SetContent("loading...")
-	v.SetSize(v.width, v.height)
-	return cmds.InspectContainer(v.deps.Ctx, v.deps.Client, current.ID, current.Name)
-}
-
 func (v *Containers) info(title string, body []string) tea.Cmd {
 	return request(ConfirmRequest{Severity: components.SevInfo, Title: title, Body: body})
-}
-
-// View renders the table, plus the detail pane when it is open.
-func (v *Containers) View() string {
-	if !v.detailOpen {
-		return v.table.View()
-	}
-	s := theme.Current()
-	return v.table.View() + "\n" +
-		s.Dim.Render(strings.Repeat("-", v.width)) + "\n" +
-		v.detail.View()
 }
 
 // Hints are the footer bindings.
 func (v *Containers) Hints() []key.Binding {
 	k := v.deps.Keys
+	// Ordered by what gets used, because the bar drops what does not fit: the
+	// actions come before the niceties.
 	return []key.Binding{
-		k.Global.Help, k.Global.Filter, k.Global.Mark,
-		k.Containers.Detail, k.Containers.Logs, k.Containers.Exec,
-		k.Containers.Stop, k.Containers.Restart, k.Containers.Remove,
-		k.Containers.Palette, k.Global.Quit,
+		k.Containers.Logs, k.Containers.Detail, k.Containers.Start,
+		k.Containers.Stop, k.Containers.Restart, v.pauseHint(),
+		k.Containers.Remove, k.Containers.Exec, k.Containers.New,
+		k.Containers.Palette, k.Global.Filter, k.Global.Help, k.Global.Quit,
 	}
+}
+
+// pauseHint says which half of the toggle the row under the cursor needs. A
+// paused container cannot be started, only unpaused, and a bar that says
+// "pause" in front of one is worse than saying nothing.
+func (v *Containers) pauseHint() key.Binding {
+	binding := v.deps.Keys.Containers.Pause
+	label := "pause"
+	if current, ok := v.current(); ok && current.State == docker.StatePaused {
+		label = "unpause"
+	}
+	return key.NewBinding(
+		key.WithKeys(binding.Keys()...),
+		key.WithHelp(binding.Help().Key, label),
+	)
 }
 
 // VisibleIDs are the containers currently on screen. Above the stats stream
@@ -667,3 +713,34 @@ func (v *Containers) VisibleIDs() []string { return v.table.VisibleIDs() }
 // Filtering reports whether the filter input has focus, so the app leaves
 // global keys alone while text is being typed.
 func (v *Containers) Filtering() bool { return v.table.Filtering() }
+
+// Summary says what the dots in the header cannot: how the containers group
+// into stacks, and whether any of them no longer match their file.
+func (v *Containers) Summary() string {
+	projects := ""
+	if n := len(v.deps.Store.Projects); n > 0 {
+		projects = plural(n, "compose project")
+	}
+	drift := ""
+	if n := v.deps.Store.DriftedProjects(); n > 0 {
+		drift = fmt.Sprintf("%d drifted", n)
+	}
+
+	loose := 0
+	for _, c := range v.deps.Store.Containers {
+		if compose.ProjectOf(c.Labels) == "" {
+			loose++
+		}
+	}
+	unmanaged := ""
+	if loose > 0 && projects != "" {
+		unmanaged = fmt.Sprintf("%d outside a project", loose)
+	}
+
+	return summaryOf(
+		plural(len(v.deps.Store.Containers), "container"),
+		projects,
+		unmanaged,
+		drift,
+	)
+}

@@ -9,8 +9,10 @@ import (
 	"github.com/RobinHil/hublot/internal/docker"
 )
 
-// historyLen is how many samples the sparklines keep per container.
-const historyLen = 40
+// historyLen is how many samples the sparklines keep. The header stretches its
+// two graphs across whatever width is left, so the history has to be long
+// enough to fill a wide terminal rather than trailing off into blanks.
+const historyLen = 160
 
 // Store is every piece of data the UI renders. It lives inside the Bubble Tea
 // model and is only ever mutated from Update, on a single goroutine, which is
@@ -28,6 +30,10 @@ type Store struct {
 
 	// Stats holds the latest sample per running container.
 	Stats map[string]docker.Stats
+	// HostCPU and HostMem are the totals across every container being
+	// streamed, kept over time so the header can plot them.
+	HostCPU []float64
+	HostMem []float64
 	// CPUHistory and MemHistory feed the sparklines.
 	CPUHistory map[string][]float64
 	MemHistory map[string][]float64
@@ -166,6 +172,68 @@ func (s *Store) ApplyStats(st docker.Stats) {
 		s.CPUHistory[st.ContainerID] = appendHistory(s.CPUHistory[st.ContainerID], st.CPUPercent)
 	}
 	s.MemHistory[st.ContainerID] = appendHistory(s.MemHistory[st.ContainerID], float64(st.MemUsage))
+	s.recordTotals()
+}
+
+// recordTotals keeps the host-wide figures over time. They are recomputed from
+// the samples rather than accumulated, so a container going away takes its
+// share with it instead of leaving a step in the graph.
+func (s *Store) recordTotals() {
+	var cpu, mem float64
+	for _, sample := range s.Stats {
+		if sample.CPUValid {
+			cpu += sample.CPUPercent
+		}
+		mem += float64(sample.MemUsage)
+	}
+	if s.Info.NCPU > 0 {
+		cpu /= float64(s.Info.NCPU)
+	}
+
+	s.HostCPU = appendHistory(s.HostCPU, cpu)
+	s.HostMem = appendHistory(s.HostMem, mem)
+}
+
+// Totals is what the containers are using right now, as a share of the host
+// for CPU and in bytes for memory.
+func (s *Store) Totals() (cpuPercent float64, mem int64) {
+	for _, sample := range s.Stats {
+		if sample.CPUValid {
+			cpuPercent += sample.CPUPercent
+		}
+		mem += sample.MemUsage
+	}
+	if s.Info.NCPU > 0 {
+		cpuPercent /= float64(s.Info.NCPU)
+	}
+	return cpuPercent, mem
+}
+
+// StateCounts breaks the container list down the way the header shows it.
+func (s *Store) StateCounts() (running, paused, stopped int) {
+	for _, c := range s.Containers {
+		switch c.State {
+		case docker.StateRunning:
+			running++
+		case docker.StatePaused:
+			paused++
+		default:
+			stopped++
+		}
+	}
+	return running, paused, stopped
+}
+
+// DriftedProjects counts the Compose projects whose file no longer matches
+// what is running, which is the one number that belongs in a header.
+func (s *Store) DriftedProjects() int {
+	n := 0
+	for _, p := range s.Projects {
+		if p.Drifted() {
+			n++
+		}
+	}
+	return n
 }
 
 // DropStats forgets a container's samples, called when it stops or disappears.

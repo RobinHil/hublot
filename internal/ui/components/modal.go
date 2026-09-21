@@ -49,6 +49,11 @@ type Modal struct {
 	Word string
 	// Payload travels back in ConfirmedMsg.
 	Payload any
+	// Action, when set on an error, offers a way out of the failure rather
+	// than only naming it: the text is the offer, and accepting emits
+	// ConfirmedMsg like any other dialog. A file that will not parse is a file
+	// to open, and making the user go and find it is the whole problem.
+	Action string
 
 	input textinput.Model
 	width int
@@ -97,7 +102,11 @@ func (m *Modal) Update(msg tea.Msg, k keys.Map) tea.Cmd {
 
 	switch m.Severity {
 	case SevInfo, SevError:
-		// Any acknowledgement closes an informational dialog.
+		// An offer needs its own key: any acknowledgement closes a dialog that
+		// only reports, and accepting by accident is not an acknowledgement.
+		if m.Action != "" && key.Matches(km, k.Modal.Fix) {
+			return m.confirm()
+		}
 		if key.Matches(km, k.Modal.Confirm) || key.Matches(km, k.Modal.Cancel) ||
 			key.Matches(km, k.Global.Quit) {
 			return dismiss
@@ -149,6 +158,9 @@ func (m *Modal) View() string {
 	b.WriteString("\n")
 	switch m.Severity {
 	case SevInfo, SevError:
+		if m.Action != "" {
+			b.WriteString(s.Key.Render("e") + s.Help.Render(": "+m.Action+"   "))
+		}
 		b.WriteString(s.Help.Render("esc: close"))
 	case SevTyped:
 		b.WriteString(m.input.View())

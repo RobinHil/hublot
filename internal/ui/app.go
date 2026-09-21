@@ -22,10 +22,6 @@ import (
 	"github.com/RobinHil/hublot/internal/ui/views"
 )
 
-// minWidth is the narrowest terminal hublot renders in. Below it the tables
-// would be unreadable, so it says so instead (AGENTS.md section 9.1).
-const minWidth = 80
-
 // messageTTL is how long a transient footer message stays up.
 const messageTTL = 6 * time.Second
 
@@ -42,18 +38,25 @@ type App struct {
 
 	views  []views.View
 	active int
-	logs   *views.Logs
 	tasks  components.TaskPanel
 
-	modal      *components.Modal
-	modalRun   func() tea.Cmd
-	picker     *components.Picker
-	prompt     *components.Prompt
-	helpOpen   bool
-	helpOffset int
-	helpMax    int
-	logsOpen   bool
-	logsCancel context.CancelFunc
+	// The side panel: logs, inspect output, anything worth reading next to the
+	// list rather than instead of it.
+	panel      components.Panel
+	panelShare PanelShare
+	// dragging is set while the divider is held, so the panel follows the
+	// mouse until the button comes back up.
+	dragging bool
+
+	modal       *components.Modal
+	modalRun    func() tea.Cmd
+	picker      *components.Picker
+	prompt      *components.Prompt
+	form        *components.Form
+	helpOpen    bool
+	helpOffset  int
+	helpMax     int
+	panelCancel context.CancelFunc
 
 	// stats streams, one goroutine and one cancel per container
 	// (AGENTS.md section 6.3).
@@ -62,6 +65,9 @@ type App struct {
 	logCh        chan docker.LogLine
 	taskCh       chan taskEvent
 	taskSeq      int
+	// What each running compose task was doing, so a failure can offer to open
+	// the file behind it and run the same command again.
+	taskOf map[string]composeTask
 
 	events <-chan docker.EventUpdate
 
@@ -109,21 +115,26 @@ func New(ctx context.Context, client *docker.Client, cfg config.Config, cli comp
 		cfg:          cfg,
 		keys:         k,
 		cli:          cli,
-		logs:         views.NewLogs(k),
 		tasks:        components.NewTaskPanel(),
+		panel:        components.NewPanel(),
+		panelShare:   ShareThird,
 		statsCancels: map[string]context.CancelFunc{},
 		statsCh:      make(chan docker.Stats, 128),
 		logCh:        make(chan docker.LogLine, 512),
 		taskCh:       make(chan taskEvent, 256),
+		taskOf:       map[string]composeTask{},
 	}
 
 	containers := views.NewContainers(deps)
+	// Compose comes second because that is how hosts are actually run: stacks
+	// first, then the loose objects underneath them. The order here is the
+	// order of the tabs and of the digit keys, and nothing else depends on it.
 	app.views = []views.View{
 		containers,
+		views.NewCompose(deps),
 		views.NewImages(deps),
 		views.NewVolumes(deps),
 		views.NewNetworks(deps),
-		views.NewCompose(deps),
 		views.NewDisk(deps),
 	}
 
@@ -161,6 +172,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return a.handleKey(m)
 
+	case tea.MouseMsg:
+		return a, a.handleMouse(m)
+
 	case cmds.TickMsg:
 		return a, a.tick()
 
@@ -173,7 +187,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, waitForStats(a.statsCh)
 
 	case LogMsg:
-		a.logs.Append(m.Line)
+		a.panel.AppendService(m.Line.Service, m.Line.Text, m.Line.Stream == "stderr")
 		return a, waitForLogs(a.logCh)
 
 	case TaskLineMsg:
@@ -183,6 +197,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TaskDoneMsg:
 		if a.tasks.Finish(m.TaskID, m.ExitCode, m.Err) {
 			a.setMessage("a task failed, see the task panel", true)
+			// The commonest failures have an obvious cause and a one-line fix,
+			// and leaving someone to find it in sixty characters of endpoint id
+			// is not help.
+			if modal, ok := a.explain(a.tasks.Output(m.TaskID)); ok {
+				modal.Body = append(modal.Body, "", "The whole output is in the task panel, which t opens.")
+				a.offerFix(&modal, a.taskOf[m.TaskID], a.tasks.Output(m.TaskID))
+				a.openModal(modal)
+			}
+			delete(a.taskOf, m.TaskID)
 		}
 		return a, tea.Batch(waitForTasks(a.taskCh), cmds.RefreshAll(a.ctx, a.client))
 
@@ -249,8 +272,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cmds.ActionDoneMsg:
 		if m.Err != nil {
-			a.openModal(components.NewModal(components.SevError, "action failed",
-				[]string{m.Err.Error()}, nil))
+			// The same explanation for a direct action: running a container
+			// hits the port and the name clashes just as compose does.
+			if modal, ok := a.explain(m.Err.Error()); ok {
+				modal.Body = append(modal.Body, "", m.Err.Error())
+				a.openModal(modal)
+			} else {
+				a.openModal(components.NewModal(components.SevError, "action failed",
+					[]string{m.Err.Error()}, nil))
+			}
 		} else {
 			a.setMessage(m.Label, false)
 		}
@@ -294,10 +324,19 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
+	case components.SubmittedMsg:
+		run, ok := m.Payload.(func(map[string]string) tea.Cmd)
+		a.form = nil
+		if ok && run != nil {
+			return a, run(m.Values)
+		}
+		return a, nil
+
 	case components.DismissedMsg:
 		a.closeModal()
 		a.picker = nil
 		a.prompt = nil
+		a.form = nil
 		return a, nil
 
 	case views.ConfirmRequest:
@@ -311,6 +350,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.prompt = &p
 		return a, textinput.Blink
 
+	case views.FormRequest:
+		f := components.NewForm(m.Title, m.Subtitle, m.Fields, m.Run)
+		f.SetSize(a.width, a.height)
+		a.form = &f
+		return a, textinput.Blink
+
 	case views.PickerRequest:
 		p := components.NewPicker(m.Title, m.Choices)
 		p.SetSize(a.width, a.height)
@@ -321,11 +366,20 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.setMessage("read-only session: that action is disabled", true)
 		return a, nil
 
+	case views.DetailRequest:
+		return a, a.openDetail(m)
+
 	case views.LogsRequest:
 		return a, a.openContainerLogs(m.ContainerID, m.Name)
 
 	case views.ComposeLogsRequest:
-		return a, a.openProjectLogs(m.Project)
+		return a, a.openProjectLogs(m.Project, m.Service)
+
+	case views.EditRequest:
+		return a, a.openEditor(m)
+
+	case editFinishedMsg:
+		return a, a.editFinished(m)
 
 	case views.ExecRequest:
 		return a, a.openExec(m.ContainerID, m.Name)
@@ -362,6 +416,9 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Overlays get the key first, innermost last opened.
+	if a.form != nil {
+		return a, a.form.Update(msg, a.keys)
+	}
 	if a.prompt != nil {
 		return a, a.prompt.Update(msg, a.keys)
 	}
@@ -388,13 +445,6 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 	}
-	if a.logsOpen {
-		cmd, closed := a.logs.Update(msg)
-		if closed {
-			a.closeLogs()
-		}
-		return a, cmd
-	}
 	if a.tasks.Visible {
 		if key.Matches(msg, a.keys.Global.Tasks) || key.Matches(msg, a.keys.Global.Escape) {
 			a.tasks.Visible = false
@@ -403,9 +453,41 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.tasks.Update(msg)
 	}
 
+	// The panel takes the keys while it has the focus, so reading and
+	// searching in it never fights with the list underneath.
+	if a.panel.Focused() {
+		switch {
+		case key.Matches(msg, a.keys.Panel.Focus):
+			a.panel.SetFocus(false)
+			return a, nil
+		case key.Matches(msg, a.keys.Panel.Close):
+			a.closePanel()
+			return a, nil
+		case key.Matches(msg, a.keys.Panel.Width):
+			a.cyclePanelWidth()
+			return a, nil
+		}
+		return a, a.panel.Update(msg, a.keys)
+	}
+
 	// Global keys, unless the active view is capturing text for its filter.
 	if !a.filtering() {
 		switch {
+		case key.Matches(msg, a.keys.Panel.Focus):
+			if a.panel.IsOpen() {
+				a.panel.SetFocus(true)
+			}
+			return a, nil
+		case key.Matches(msg, a.keys.Panel.Width):
+			if a.panel.IsOpen() {
+				a.cyclePanelWidth()
+			}
+			return a, nil
+		case key.Matches(msg, a.keys.Panel.Close):
+			if a.panel.IsOpen() {
+				a.closePanel()
+				return a, nil
+			}
 		case key.Matches(msg, a.keys.Global.Quit):
 			return a, a.quit()
 		case key.Matches(msg, a.keys.Global.Help):
@@ -429,11 +511,123 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	before := a.views[a.active].Marked()
 	cmd := a.views[a.active].Update(msg)
+
+	// Selecting is the one thing in a list that does nothing visible on its
+	// own, so the first time it happens the interface says what it is for.
+	if after := a.views[a.active].Marked(); after > 0 && before == 0 {
+		a.setMessage("selected: the next action applies to every selected row, esc clears", false)
+	}
+
 	// Scrolling changes which containers are visible, which changes which ones
 	// are worth streaming when the cap is reached.
 	a.syncStatsStreams()
 	return a, cmd
+}
+
+// handleMouse routes the wheel and clicks. A click on the tab bar switches
+// view, a click in the panel focuses it, and anything else belongs to whatever
+// is under the pointer.
+func (a *App) handleMouse(msg tea.MouseMsg) tea.Cmd {
+	if a.modal != nil || a.picker != nil || a.prompt != nil || a.form != nil || a.helpOpen {
+		return nil
+	}
+
+	l := a.geometry()
+	if l.TooSmall {
+		return nil
+	}
+
+	clicked := msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress
+
+	// The divider is dragged rather than cycled through fixed fractions. Once
+	// held it keeps the mouse until the button is released, wherever it goes,
+	// which is what makes it feel like a divider and not a button.
+	if a.dragging {
+		switch msg.Action {
+		case tea.MouseActionRelease:
+			a.dragging = false
+		case tea.MouseActionMotion:
+			a.dragPanel(l, msg.X, msg.Y)
+		}
+		return nil
+	}
+	if clicked && a.onDivider(l, msg.X, msg.Y) {
+		a.dragging = true
+		return nil
+	}
+
+	// The task panel is drawn instead of the list, so it takes the wheel too.
+	// Without this the wheel scrolls a list nobody can see.
+	if a.tasks.Visible {
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			a.tasks.Wheel(true)
+		case tea.MouseButtonWheelDown:
+			a.tasks.Wheel(false)
+		}
+		return nil
+	}
+
+	if l.ShowTabs && msg.Y == l.TabRow() && clicked {
+		if n, ok := components.TabAt(a.titles(), msg.X, l.Compact); ok {
+			a.switchView(n)
+			return a.enterView()
+		}
+		return nil
+	}
+
+	// Beside the list, the panel owns everything to the right of the split;
+	// stacked, everything below it.
+	if l.PanelOpen && !l.ListHidden {
+		inPanel := (!l.PanelStacked && msg.X >= l.ListWidth) ||
+			(l.PanelStacked && msg.Y >= a.panelTop(l))
+		if inPanel {
+			if clicked {
+				a.panel.SetFocus(true)
+			}
+			return a.panel.Update(msg, a.keys)
+		}
+		if clicked {
+			a.panel.SetFocus(false)
+		}
+	} else if l.ListHidden {
+		return a.panel.Update(msg, a.keys)
+	}
+
+	return a.views[a.active].Update(msg)
+}
+
+// onDivider says whether a click landed on the line between the list and the
+// panel, which is the only part of the screen that resizes them.
+func (a *App) onDivider(l Layout, x, y int) bool {
+	if !l.PanelOpen || l.ListHidden {
+		return false
+	}
+	// One column is a hard thing to hit with a mouse, so the row or column
+	// just inside the panel counts as the divider too. The tolerance is taken
+	// from the panel's side: a click there would otherwise only focus it,
+	// while a click on the list's last column selects a row.
+	if l.PanelStacked {
+		return y == a.panelTop(l) || y == a.panelTop(l)+1
+	}
+	return x == l.ListWidth || x == l.ListWidth+1
+}
+
+// dragPanel moves the divider to where the mouse is.
+func (a *App) dragPanel(l Layout, x, y int) {
+	if l.PanelStacked {
+		a.panelShare = l.ShareAtRow(y)
+	} else {
+		a.panelShare = l.ShareAtColumn(x)
+	}
+	a.layout()
+}
+
+// panelTop is the first screen row the stacked panel occupies.
+func (a *App) panelTop(l Layout) int {
+	return l.ContentRow() + l.ListHeight
 }
 
 // viewNumber maps the digit keys to a tab index.
@@ -698,24 +892,35 @@ func (a *App) refreshViews() {
 	}
 }
 
-// layout hands each pane the space the frame will give it. The arithmetic is
-// the same as in frame(): status bar, message line and hint line are fixed, and
-// the tabbed views lose one more line to the tab bar.
+// layout hands each pane the space Compute decided it gets.
 func (a *App) layout() {
-	paneHeight := a.height - 3
-	if paneHeight < 1 {
-		paneHeight = 1
+	l := a.geometry()
+	if l.TooSmall {
+		return
 	}
 
-	viewHeight := paneHeight - 1
-	if viewHeight < 3 {
-		viewHeight = 3
+	top := l.HeaderRows
+	if l.ShowTabs {
+		top++
 	}
 	for _, v := range a.views {
-		v.SetSize(a.width, viewHeight)
+		v.SetSize(l.ListWidth, l.ListHeight)
+		if placeable, ok := v.(interface{ SetOrigin(int) }); ok {
+			placeable.SetOrigin(top)
+		}
 	}
-	a.logs.SetSize(a.width, paneHeight)
-	a.tasks.SetSize(a.width, paneHeight)
+	if l.PanelOpen {
+		switch {
+		case l.ListHidden:
+			a.panel.SetEdge(components.EdgeNone)
+		case l.PanelStacked:
+			a.panel.SetEdge(components.EdgeTop)
+		default:
+			a.panel.SetEdge(components.EdgeLeft)
+		}
+		a.panel.SetSize(l.PanelWidth, l.PanelHeight)
+	}
+	a.tasks.SetSize(l.Width, l.ListHeight+1)
 	if a.modal != nil {
 		a.modal.SetSize(a.width, a.height)
 	}
@@ -725,6 +930,33 @@ func (a *App) layout() {
 	if a.prompt != nil {
 		a.prompt.SetSize(a.width, a.height)
 	}
+	if a.form != nil {
+		a.form.SetSize(a.width, a.height)
+	}
+}
+
+// geometry resolves the current frame, which the renderer and the sizing both
+// read rather than each doing the arithmetic.
+func (a *App) geometry() Layout {
+	return Compute(a.width, a.height, a.panel.IsOpen(), a.panelShare)
+}
+
+// cyclePanelWidth steps through the shares, skipping straight past any that
+// this screen cannot honour.
+func (a *App) cyclePanelWidth() {
+	a.panelShare = a.panelShare.Next()
+	a.layout()
+}
+
+// closePanel stops whatever was feeding the panel and puts the keys back on
+// the list.
+func (a *App) closePanel() {
+	if a.panelCancel != nil {
+		a.panelCancel()
+		a.panelCancel = nil
+	}
+	a.panel.Close()
+	a.layout()
 }
 
 func (a *App) setMessage(text string, isErr bool) {
@@ -746,7 +978,7 @@ func (a *App) closeModal() {
 // quit cancels every stream and lets Bubble Tea restore the terminal.
 func (a *App) quit() tea.Cmd {
 	a.quitting = true
-	a.closeLogs()
+	a.closePanel()
 	for id, cancel := range a.statsCancels {
 		cancel()
 		delete(a.statsCancels, id)

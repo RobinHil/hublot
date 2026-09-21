@@ -36,6 +36,9 @@ type Config struct {
 	// ConfirmDestructive can be turned off by users who want fewer dialogs;
 	// the system-wide prune always confirms regardless.
 	ConfirmDestructive bool `yaml:"confirm_destructive"`
+	// Editor is the command a compose file is handed to, as it would be typed:
+	// "nvim", "code --wait". Empty means ask once and remember the answer.
+	Editor string `yaml:"editor"`
 }
 
 // Default is the configuration used when no file exists.
@@ -94,6 +97,33 @@ func Load() (Config, error) {
 	}
 
 	return cfg.normalised(), nil
+}
+
+// Save writes the configuration back, creating the directory when it is the
+// first time. It is called when the interface learns something worth keeping,
+// such as which editor to use, so the question is asked once rather than every
+// session.
+func Save(cfg Config) error {
+	path, err := Path()
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
+	}
+
+	body, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("formatting the configuration: %w", err)
+	}
+
+	header := "# hublot configuration. Every setting has a working default, so\n" +
+		"# anything removed from here simply goes back to it.\n"
+	if err := os.WriteFile(path, append([]byte(header), body...), 0o644); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	return nil
 }
 
 // normalised replaces nonsensical values with the defaults rather than letting

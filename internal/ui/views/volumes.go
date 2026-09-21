@@ -292,3 +292,30 @@ func (v *Volumes) Hints() []key.Binding {
 
 // Filtering reports whether the filter input has focus.
 func (v *Volumes) Filtering() bool { return v.table.Filtering() }
+
+// Summary is how many volumes nothing mounts, which is where disk hides.
+func (v *Volumes) Summary() string {
+	users := v.mounters()
+
+	var size int64
+	var unused int
+	for _, vol := range v.deps.Store.Volumes {
+		if vol.Size > 0 {
+			size += vol.Size
+		}
+		if len(users[vol.Name]) == 0 && vol.RefCount <= 0 {
+			unused++
+		}
+	}
+
+	sizePart := "sizes after a disk refresh"
+	if size > 0 {
+		sizePart = state.FormatBytes(size)
+	}
+	unusedPart := ""
+	if unused > 0 {
+		unusedPart = fmt.Sprintf("%d unused", unused)
+	}
+
+	return summaryOf(plural(len(v.deps.Store.Volumes), "volume"), sizePart, unusedPart)
+}

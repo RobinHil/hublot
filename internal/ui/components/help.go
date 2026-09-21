@@ -148,14 +148,29 @@ func fit(s string, width int) string {
 	return string(runes[:width-1]) + "."
 }
 
-// HintBar renders the one-line key reminder at the bottom of a view.
+// HintBar renders the one-line key reminder at the bottom of a view. Entries
+// that do not fit are dropped whole: half a word reads as a rendering bug,
+// and the help overlay carries the full list anyway.
 func HintBar(bindings []key.Binding, width int) string {
 	s := theme.Current()
+	separator := s.Faint.Render("  ")
 
-	parts := make([]string, 0, len(bindings))
+	var parts []string
+	used := 0
 	for _, b := range bindings {
 		h := b.Help()
-		parts = append(parts, s.Key.Render(h.Key)+s.Help.Render(":"+h.Desc))
+		entry := s.Key.Render(h.Key) + s.Help.Render(":"+h.Desc)
+
+		cost := lipgloss.Width(entry)
+		if len(parts) > 0 {
+			cost += 2
+		}
+		if used+cost > width {
+			break
+		}
+		parts = append(parts, entry)
+		used += cost
 	}
-	return truncateToWidth(strings.Join(parts, s.Dim.Render("  ")), width)
+
+	return strings.Join(parts, separator)
 }

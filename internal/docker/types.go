@@ -3,7 +3,10 @@
 // See AGENTS.md section 4, rule 1.
 package docker
 
-import "time"
+import (
+	"sort"
+	"time"
+)
 
 // ContainerState values as reported by the daemon.
 const (
@@ -156,6 +159,30 @@ type Network struct {
 	Subnets    []string
 	Labels     map[string]string
 	Containers map[string]string
+}
+
+// Attachment is a container attached to a network.
+type Attachment struct {
+	ID   string
+	Name string
+}
+
+// Attached lists what is attached, in a stable order. Ranging over the map
+// gives a different order on every call, so a column built from it reshuffles
+// itself on every refresh, which is once a second: the text under the cursor
+// changes while nothing about the host has.
+func (n Network) Attached() []Attachment {
+	out := make([]Attachment, 0, len(n.Containers))
+	for id, name := range n.Containers {
+		out = append(out, Attachment{ID: id, Name: name})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name == out[j].Name {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
 }
 
 // Predefined reports whether the network is one of the three the daemon creates

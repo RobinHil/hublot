@@ -1,6 +1,7 @@
 package components
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -412,16 +413,148 @@ func TestTableScrollsThroughAGroupedList(t *testing.T) {
 	}
 }
 
-func TestTruncateToWidthKeepsStyledTextIntact(t *testing.T) {
-	// Styling is invisible but counts as runes: cutting it as plain text would
-	// stop far too early and could split an escape sequence.
+func TestPadMeasuresStyledTextByItsDisplayWidth(t *testing.T) {
+	// Styling is invisible but counts as bytes: cutting it as plain text would
+	// stop far too early and could split an escape sequence. pad is where
+	// every cell of every table passes, so it is where this has to hold.
 	styled := lipgloss.NewStyle().Bold(true).Render("abcdefghij")
-	got := truncateToWidth(styled, 5)
 
-	if w := lipgloss.Width(got); w != 5 {
-		t.Errorf("display width: got %d, want 5 (%q)", w, got)
+	got := pad(styled, 6, false)
+	if w := lipgloss.Width(got); w != 6 {
+		t.Errorf("display width: got %d, want 6 (%q)", w, got)
 	}
 	if !strings.Contains(got, "abcde") {
 		t.Errorf("the visible text must survive: %q", got)
+	}
+
+	// And a cell that fits is left exactly as it was.
+	short := lipgloss.NewStyle().Bold(true).Render("ab")
+	if got := pad(short, 4, false); !strings.Contains(got, "ab") {
+		t.Errorf("a short styled cell must survive: %q", got)
+	}
+}
+
+func TestPadSanitisesWhatTheDaemonReported(t *testing.T) {
+	// Container names, image references and statuses all come from the daemon
+	// and all arrive here. A cursor movement in one would redraw the table.
+	got := pad("na\x1b[2Jme", 10, false)
+	if strings.ContainsRune(got, 0x1b) {
+		t.Errorf("an escape reached a table cell: %q", got)
+	}
+	if !strings.Contains(got, "name") {
+		t.Errorf("the text itself must survive: %q", got)
+	}
+}
+
+// The wheel moves the window, not the cursor. A list that sits still until the
+// cursor reaches an edge and then jumps is what reads as broken scrolling.
+func TestWheelMovesTheWindowNotTheCursor(t *testing.T) {
+	tbl := NewTable([]Column{{Title: "NAME", MinWidth: 10}})
+	tbl.SetSize(40, 10)
+
+	rows := make([]Row, 50)
+	for i := range rows {
+		rows[i] = Row{ID: strconv.Itoa(i), Cells: []Cell{Txt(strconv.Itoa(i))}}
+	}
+	tbl.SetRows(rows)
+
+	tbl.scroll(3)
+	if tbl.offset != 3 {
+		t.Errorf("offset = %d, want the window moved by 3", tbl.offset)
+	}
+	// The cursor was on row 0, which the window has left behind, so it comes
+	// along to the first visible row and no further.
+	if tbl.cursor != 3 {
+		t.Errorf("cursor = %d, want it dragged to the top of the window", tbl.cursor)
+	}
+
+	// Scrolling back up leaves the cursor where it is: it is still visible.
+	tbl.scroll(-1)
+	if tbl.offset != 2 {
+		t.Errorf("offset = %d, want 2", tbl.offset)
+	}
+	if tbl.cursor != 3 {
+		t.Errorf("cursor = %d, want it left alone while it is on screen", tbl.cursor)
+	}
+}
+
+// Scrolling stops at the end rather than running off into blank space.
+func TestWheelStopsOnTheLastRow(t *testing.T) {
+	tbl := NewTable([]Column{{Title: "NAME", MinWidth: 10}})
+	tbl.SetSize(40, 10)
+
+	rows := make([]Row, 20)
+	for i := range rows {
+		rows[i] = Row{ID: strconv.Itoa(i), Cells: []Cell{Txt(strconv.Itoa(i))}}
+	}
+	tbl.SetRows(rows)
+
+	tbl.scroll(500)
+	if tbl.offset != tbl.maxOffset() {
+		t.Errorf("offset = %d, want it pinned to %d", tbl.offset, tbl.maxOffset())
+	}
+	if last := tbl.offset + tbl.rowsFitting(tbl.offset); last < len(rows) {
+		t.Errorf("the last row has to be on screen: window ends at %d of %d", last, len(rows))
+	}
+	if tbl.cursor >= len(rows) {
+		t.Errorf("cursor = %d, off the end of %d rows", tbl.cursor, len(rows))
+	}
+}
+
+// An empty list is scrolled like any other, and must not index into nothing.
+func TestWheelOnAnEmptyList(t *testing.T) {
+	tbl := NewTable([]Column{{Title: "NAME", MinWidth: 10}})
+	tbl.SetSize(40, 10)
+	tbl.scroll(3)
+	tbl.scroll(-3)
+}
+
+// When everything fits there is no window to move, and a wheel that does
+// nothing reads as a wheel that is broken: it moves the selection instead.
+func TestWheelMovesTheSelectionWhenNothingCanScroll(t *testing.T) {
+	tbl := NewTable([]Column{{Title: "NAME", MinWidth: 10}})
+	tbl.SetSize(40, 20)
+
+	rows := make([]Row, 5)
+	for i := range rows {
+		rows[i] = Row{ID: strconv.Itoa(i), Cells: []Cell{Txt(strconv.Itoa(i))}}
+	}
+	tbl.SetRows(rows)
+
+	if tbl.maxOffset() != 0 {
+		t.Fatal("five rows in twenty fit, so there is nothing to scroll")
+	}
+	tbl.scroll(3)
+	if tbl.cursor != 3 {
+		t.Errorf("cursor = %d, want the wheel to have moved it", tbl.cursor)
+	}
+	if tbl.offset != 0 {
+		t.Errorf("offset = %d, want the window left alone", tbl.offset)
+	}
+}
+
+// The cursor keeps a few rows of context ahead of it, so a long list starts
+// moving before the cursor reaches the edge rather than lurching at the end.
+func TestCursorKeepsContextAhead(t *testing.T) {
+	tbl := NewTable([]Column{{Title: "NAME", MinWidth: 10}})
+	tbl.SetSize(40, 12)
+
+	rows := make([]Row, 100)
+	for i := range rows {
+		rows[i] = Row{ID: strconv.Itoa(i), Cells: []Cell{Txt(strconv.Itoa(i))}}
+	}
+	tbl.SetRows(rows)
+
+	window := tbl.rowsFitting(0)
+	for i := 0; i < window; i++ {
+		tbl.move(1)
+	}
+
+	// The window moved before the cursor could reach the last row.
+	if tbl.offset == 0 {
+		t.Error("the list has to start moving before the cursor hits the edge")
+	}
+	if gap := tbl.offset + tbl.rowsFitting(tbl.offset) - 1 - tbl.cursor; gap < 1 {
+		t.Errorf("only %d rows of context past the cursor", gap)
 	}
 }

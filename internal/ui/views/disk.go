@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/RobinHil/hublot/internal/state"
 	"github.com/RobinHil/hublot/internal/ui/components"
@@ -26,11 +27,14 @@ type Disk struct {
 // NewDisk builds the disk view.
 func NewDisk(d Deps) *Disk {
 	cols := []components.Column{
-		{Title: "WHAT", MinWidth: 30},
-		{Title: "COUNT", Width: 7, Right: true, Priority: 2},
-		{Title: "SIZE", Width: 10, Right: true},
+		{Title: "WHAT", MinWidth: 28},
+		{Title: "COUNT", Width: 6, Right: true, Priority: 3},
+		{Title: "SIZE", Width: 9, Right: true},
+		// The share is what turns a column of numbers into something readable
+		// at a glance: where the disk actually went.
+		{Title: "SHARE", Width: 13, Priority: 2},
 		{Title: "RECLAIMABLE", Width: 12, Right: true},
-		{Title: "DETAIL", Width: 28, Priority: 1},
+		{Title: "DETAIL", Width: 26, Priority: 1},
 	}
 
 	t := components.NewTable(cols)
@@ -44,13 +48,6 @@ func (v *Disk) Title() string { return "Disk" }
 
 // SetLoading marks the view busy while df runs.
 func (v *Disk) SetLoading(loading bool) { v.loading = loading }
-
-// SetSize keeps one line for the df age header this view prints above its
-// table, so the two together are exactly as tall as the frame allows.
-func (v *Disk) SetSize(width, height int) {
-	v.width, v.height = width, height
-	v.table.SetSize(width, height-1)
-}
 
 // pruneCategories are the categories offered, in the order the daemon
 // processes them.
@@ -134,20 +131,28 @@ func (v *Disk) summaryRows() []components.Row {
 		cacheSize += b.Size
 	}
 
+	total := imagesSize + volumesSize + containersSize + cacheSize
 	group := "system df, " + age
+
 	return []components.Row{
-		v.summaryRow(group, "images", len(du.Images), imagesSize, du.LayersSize),
-		v.summaryRow(group, "containers (writable layers)", len(du.Containers), containersSize, 0),
-		v.summaryRow(group, "volumes", len(du.Volumes), volumesSize, 0),
-		v.summaryRow(group, "build cache", len(du.BuildCache), cacheSize, 0),
+		v.summaryRow(group, "images", len(du.Images), imagesSize, total,
+			"layers on disk: "+state.FormatBytes(du.LayersSize)),
+		v.summaryRow(group, "containers (writable layers)", len(du.Containers), containersSize, total, ""),
+		v.summaryRow(group, "volumes", len(du.Volumes), volumesSize, total, ""),
+		v.summaryRow(group, "build cache", len(du.BuildCache), cacheSize, total, ""),
 	}
 }
 
-func (v *Disk) summaryRow(group, what string, count int, size, layers int64) components.Row {
-	detail := ""
-	if layers > 0 {
-		detail = "layers on disk: " + state.FormatBytes(layers)
+// summaryRow is one line of the df breakdown, with a bar for its share of the
+// total: the question this view answers is where the space went, and a column
+// of sizes answers it slowly.
+func (v *Disk) summaryRow(group, what string, count int, size, total int64, detail string) components.Row {
+	share := ""
+	if total > 0 {
+		share = components.Ratio(size, total, 8) + fmt.Sprintf(" %3.0f%%",
+			float64(size)/float64(total)*100)
 	}
+
 	return components.Row{
 		ID:    "summary/" + what,
 		Group: group,
@@ -155,6 +160,7 @@ func (v *Disk) summaryRow(group, what string, count int, size, layers int64) com
 			components.Txt(what),
 			components.Txt(fmt.Sprintf("%d", count)),
 			components.Txt(state.FormatBytes(size)),
+			components.Txt(share),
 			components.Txt(""),
 			components.Txt(detail),
 		},
@@ -196,7 +202,8 @@ func (v *Disk) categoryRow(cat state.Category, p state.Preview) components.Row {
 			name,
 			components.Txt(fmt.Sprintf("%d", len(p.Items))),
 			components.Txt(""),
-			components.Txt(state.FormatBytes(p.Reclaimable)),
+			components.Txt(""),
+			components.Styled(state.FormatBytes(p.Reclaimable), reclaimStyle(p)),
 			components.Txt(detail),
 		},
 	}
@@ -223,6 +230,7 @@ func (v *Disk) itemRows(p state.Preview) []components.Row {
 				components.Txt("    " + it.Name),
 				components.Txt(""),
 				components.Txt(state.FormatBytes(it.Size)),
+				components.Txt(""),
 				components.Txt(""),
 				components.Styled(owner+"  "+it.Detail, s.Dim),
 			},
@@ -251,6 +259,7 @@ func (v *Disk) leftoverRows() []components.Row {
 					components.Txt(""),
 					components.Txt(state.FormatBytes(c.SizeRW)),
 					components.Txt(""),
+					components.Txt(""),
 					components.Styled(p.Name+"  from compose run, "+c.Status, s.Dim),
 				},
 			})
@@ -272,12 +281,27 @@ func (v *Disk) leftoverRows() []components.Row {
 					components.Txt(fmt.Sprintf("%d", len(p.Volumes))),
 					components.Txt(state.FormatBytes(size)),
 					components.Txt(""),
+					components.Txt(""),
 					components.Styled("stopped stack, volumes and networks still here", s.Dim),
 				},
 			})
 		}
 	}
 	return rows
+}
+
+// reclaimStyle makes a category that would free real space stand out from the
+// ones that would free nothing.
+func reclaimStyle(p state.Preview) lipgloss.Style {
+	s := theme.Current()
+	switch {
+	case p.Empty():
+		return s.Faint
+	case p.ComposeOwned > 0:
+		return s.Warning
+	default:
+		return s.Running
+	}
 }
 
 func categoryID(c state.Category) string { return "cat/" + c.String() }
@@ -437,24 +461,9 @@ func (v *Disk) info(title string, body []string) tea.Cmd {
 	return request(ConfirmRequest{Severity: components.SevInfo, Title: title, Body: body})
 }
 
-// View renders the table with a spinner line while df is running.
-func (v *Disk) View() string {
-	s := theme.Current()
-
-	header := ""
-	switch {
-	case v.loading:
-		header = s.Warning.Render("computing disk usage, the daemon is walking every layer...")
-	case v.deps.Store.Disk == nil:
-		header = s.Dim.Render("disk usage has not been computed yet: press r")
-	default:
-		age, _ := v.deps.Store.DiskAge()
-		header = s.Dim.Render("last measured " + fmtAgo(age) + ", press r to recompute")
-	}
-
-	return header + "\n" + v.table.View()
-}
-
+// View is the table alone: the summary line in the header already says when
+// the measurement was taken and what it found, and the hint bar says which key
+// takes a new one.
 func fmtAgo(d time.Duration) string {
 	switch {
 	case d < time.Minute:
@@ -477,3 +486,48 @@ func (v *Disk) Hints() []key.Binding {
 
 // Filtering reports whether the filter input has focus.
 func (v *Disk) Filtering() bool { return v.table.Filtering() }
+
+// Summary is the headline of the whole view: what is on disk, what a prune
+// would give back, and how old the measurement is.
+func (v *Disk) Summary() string {
+	if v.deps.Store.Disk == nil {
+		if v.loading {
+			return "measuring, the daemon is walking every layer"
+		}
+		return "not measured yet, press r"
+	}
+
+	du := v.deps.Store.Disk
+	var total int64
+	for _, i := range du.Images {
+		total += i.Size
+	}
+	for _, c := range du.Containers {
+		total += c.SizeRW
+	}
+	for _, vol := range du.Volumes {
+		if vol.Size > 0 {
+			total += vol.Size
+		}
+	}
+	for _, b := range du.BuildCache {
+		total += b.Size
+	}
+
+	var reclaimable int64
+	snap := v.deps.Store.SnapshotForPrune(0)
+	for _, cat := range v.pruneCategories() {
+		if cat == state.CatImages {
+			// Counted by the wider category below, or it lands twice.
+			continue
+		}
+		reclaimable += state.BuildPreview(cat, snap).Reclaimable
+	}
+
+	age, _ := v.deps.Store.DiskAge()
+	return summaryOf(
+		state.FormatBytes(total)+" on disk",
+		state.FormatBytes(reclaimable)+" reclaimable",
+		"measured "+fmtAgo(age),
+	)
+}

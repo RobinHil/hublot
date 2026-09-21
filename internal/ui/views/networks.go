@@ -76,8 +76,8 @@ func (v *Networks) row(n docker.Network) components.Row {
 	s := theme.Current()
 
 	var attached []string
-	for _, name := range n.Containers {
-		attached = append(attached, name)
+	for _, a := range n.Attached() {
+		attached = append(attached, a.Name)
 	}
 	list := strings.Join(attached, ", ")
 	if list == "" {
@@ -165,8 +165,8 @@ func (v *Networks) palette() tea.Cmd {
 		},
 	}
 
-	for id, name := range n.Containers {
-		containerID, containerName := id, name
+	for _, a := range n.Attached() {
+		containerID, containerName := a.ID, a.Name
 		choices = append(choices, components.Choice{
 			Label: "disconnect " + containerName, Detail: "detach it from " + n.Name,
 			Destructive: true,
@@ -285,3 +285,29 @@ func (v *Networks) Hints() []key.Binding {
 
 // Filtering reports whether the filter input has focus.
 func (v *Networks) Filtering() bool { return v.table.Filtering() }
+
+// Summary separates the networks the daemon made from the ones you did, and
+// says how many of yours nothing is attached to.
+func (v *Networks) Summary() string {
+	var userDefined, unused int
+	for _, n := range v.deps.Store.Networks {
+		if n.Predefined() {
+			continue
+		}
+		userDefined++
+		if len(n.Containers) == 0 {
+			unused++
+		}
+	}
+
+	unusedPart := ""
+	if unused > 0 {
+		unusedPart = fmt.Sprintf("%d unused", unused)
+	}
+
+	return summaryOf(
+		plural(len(v.deps.Store.Networks), "network"),
+		fmt.Sprintf("%d user-defined", userDefined),
+		unusedPart,
+	)
+}
