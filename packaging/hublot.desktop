@@ -9,7 +9,8 @@ Comment[fr]=Surveiller et piloter le démon Docker local
 Icon=hublot
 Exec=hublot
 # hublot is a terminal program, so the desktop file asks for a terminal the way
-# htop's does. Without this the launcher starts it with no tty and it exits.
+# any terminal program's does. Without this the launcher starts it with no tty
+# and it exits.
 Terminal=true
 Categories=System;Monitor;ConsoleOnly;
 Keywords=docker;container;compose;monitor;prune;disk;

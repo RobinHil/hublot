@@ -36,7 +36,7 @@ export function Terminal({ frame, title, className = "" }: Props) {
 
   return (
     <figure
-      className={`overflow-hidden rounded-xl border border-edge bg-ink shadow-2xl shadow-black/40 ${className}`}
+      className={`terminal-window overflow-hidden rounded-xl border border-edge bg-ink shadow-2xl shadow-black/40 ${className}`}
     >
       <div className="flex items-center gap-2 border-b border-edge bg-panel px-4 py-2.5">
         <span className="size-3 rounded-full bg-danger/70" />

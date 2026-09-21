@@ -77,16 +77,26 @@ def capture(binary, keys, cols=COLS, rows=ROWS, settle=6.0):
 # Tall enough for the two-row dashboard, which is the header hublot draws from
 # eighteen rows up: the graphs and the host breakdown are half the point of the
 # screen, and a shorter capture shows the one-line fallback instead.
+# Each frame is captured at the shape it is shown at. The page sizes the type
+# to fit the width it has, so a frame captured wider than its column comes out
+# smaller: the two beside a paragraph are taken at eighty columns, which is the
+# narrowest hublot keeps its full tab labels at, and the hero gets the width of
+# the page.
+#
+# Eighteen rows is the other threshold: below it hublot folds its dashboard
+# into a single line, and the graphs are half of what these frames are for.
 frames = {
     "containers": capture(sys.argv[1], [], cols=104, rows=20),
     # Compose is the second tab now, so this is "2" and not "5".
-    "compose": capture(sys.argv[1], ["2"], cols=88, rows=18),
+    "compose": capture(sys.argv[1], ["2"], cols=80, rows=18),
     # The disk frame is captured with a category expanded: the point of that
     # view is the list of objects a prune would take, not the totals.
+    # Eighty-eight rather than eighty: at eighty the summary line, which is
+    # what says how much of the disk is reclaimable, is cut mid-word.
     "disk": capture(
         sys.argv[1],
         ["6", "r", "j", "j", "j", "j", "j", "j", "\r"],
-        cols=92,
+        cols=88,
         rows=18,
     ),
 }

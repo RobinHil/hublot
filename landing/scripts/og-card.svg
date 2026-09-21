@@ -40,7 +40,7 @@
 
   <g font-family="DejaVu Sans, Liberation Sans, sans-serif">
     <text x="424" y="252" font-size="84" font-weight="600" fill="#c9d3de">hublot</text>
-    <text x="424" y="330" font-size="42" fill="#58a6ff">htop for your Docker host</text>
+    <text x="424" y="330" font-size="38" fill="#58a6ff">Your Docker host, whole, in one terminal window.</text>
     <text x="424" y="402" font-size="27" fill="#8b939e">Live container stats, Compose projects with drift</text>
     <text x="424" y="444" font-size="27" fill="#8b939e">detection, and prune previews before anything is</text>
     <text x="424" y="486" font-size="27" fill="#8b939e">destroyed.</text>

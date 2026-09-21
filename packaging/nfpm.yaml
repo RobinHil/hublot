@@ -52,7 +52,7 @@ contents:
       mode: 0644
 
   # The launcher, so hublot shows up in the applications menu. It asks for a
-  # terminal, exactly as htop's own entry does.
+  # terminal, as every terminal program's own entry does.
   - src: packaging/hublot.desktop
     dst: /usr/share/applications/hublot.desktop
     file_info:

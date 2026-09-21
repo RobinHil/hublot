@@ -94,7 +94,7 @@ jobs:
           done
 
           # The page carries its text, not an empty div.
-          grep -q "htop for your Docker host" index.html
+          grep -q "A full-screen terminal UI for Docker" index.html
           grep -q "See what a prune would destroy" index.html
 
           # It references a stylesheet and a bundle, and every asset it names
@@ -177,12 +177,12 @@ jobs:
           curl -fsS -o /dev/null "$site/og.png"
           curl -fsS -o /dev/null "$site/hublot.svg"
 
-          grep -q "htop for your Docker host" /tmp/page.html
+          grep -q "A full-screen terminal UI for Docker" /tmp/page.html
           grep -q "rel=\"canonical\" href=\"$site/\"" /tmp/page.html
           grep -q "$site/" /tmp/sitemap.xml
 
           # Anything that is not there gets the site's own 404, which exists
           # only because the prerender writes one.
-          curl -sS "$site/nothing-here" | grep -q "htop for your Docker host"
+          curl -sS "$site/nothing-here" | grep -q "A full-screen terminal UI for Docker"
 
           echo "verified $site"

@@ -109,7 +109,13 @@ function Pillars() {
         </p>
 
         {pillars.map((pillar) => (
-          <article key={pillar.title} className="grid gap-10 lg:grid-cols-2 lg:items-center">
+          <article
+            key={pillar.title}
+            // The frame gets the larger share: it is a fixed grid of
+            // characters, so every column it loses is type it has to shrink,
+            // while the prose beside it reflows for nothing.
+            className="grid gap-10 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:items-center"
+          >
             <div>
               <h2 className="text-3xl font-semibold tracking-tight text-mist">
                 {pillar.title}

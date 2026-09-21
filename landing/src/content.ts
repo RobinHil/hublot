@@ -3,7 +3,7 @@
 export const repository = "https://github.com/RobinHil/hublot";
 export const releases = `${repository}/releases/latest`;
 
-export const tagline = "htop for your Docker host.";
+export const tagline = "Your Docker host, whole, in one terminal window.";
 
 export const intro =
   "Live resource usage at a glance, then keyboard-driven navigation into every object the daemon manages, with every action available without leaving the terminal.";

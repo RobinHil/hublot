@@ -6,7 +6,15 @@ import tailwindcss from "@tailwindcss/vite";
 // /<repo>/, a user site and a custom domain at the root. The workflow reads it
 // from the Pages configuration and passes it here, so moving the site never
 // means editing this file.
-const base = process.env.SITE_BASE ?? "/";
+// Pages reports a project site's base path as "/repo", with no trailing slash,
+// and everything downstream joins strings to it: "/repo" + "hublot.svg" is
+// "/repohublot.svg". So it is normalised once, here and in the prerender, and
+// nowhere else has to remember.
+const base = withTrailingSlash(process.env.SITE_BASE ?? "/");
+
+function withTrailingSlash(path: string): string {
+  return path.endsWith("/") ? path : `${path}/`;
+}
 
 export default defineConfig({
   base,

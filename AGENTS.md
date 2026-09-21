@@ -1,8 +1,8 @@
 # hublot - agent instructions
 
-`hublot` is a full-screen terminal UI for Docker, written in Go: `htop` for a
-Docker host. Live resource usage at a glance, keyboard-driven navigation into
-every object the daemon manages, every action available without leaving the TUI.
+`hublot` is a full-screen terminal UI for Docker, written in Go. Live resource
+usage at a glance, keyboard-driven navigation into every object the daemon
+manages, every action available without leaving the TUI.
 
 This file is the reference. It replaces the original spec document, which was
 deleted once distilled here. Read it fully before writing code: it describes what
@@ -811,7 +811,7 @@ driven from the `Makefile` so a release is one command:
   exists for distro-less installs, not for a launcher menu.
 
 Every format also ships the desktop launcher, so `hublot` appears in the
-applications menu the way `htop` does: `packaging/hublot.desktop` with
+applications menu the way any terminal program does: `packaging/hublot.desktop` with
 `Terminal=true`, because a launcher that starts it without a tty would just
 exit. The icon is `packaging/icons/hublot.svg`, a porthole (which is what the
 name means) with a stack of containers behind the glass, and deliberately

@@ -13,8 +13,16 @@ const dist = join(root, "dist");
 // Where the site will live. The workflow reads both from the Pages
 // configuration rather than hardcoding an address, so a custom domain works
 // without touching this file.
+// Pages reports a project site's base path as "/repo", with no trailing slash,
+// and every line below joins a filename to it. Unnormalised, the social card
+// becomes /repoog.png and the sitemap in robots.txt /repositemap.xml, both of
+// which serve a 404 while the page itself looks perfectly fine.
 const origin = (process.env.SITE_ORIGIN ?? "http://localhost:4173").replace(/\/$/, "");
-const base = process.env.SITE_BASE ?? "/";
+const rawBase = process.env.SITE_BASE ?? "/";
+const base = rawBase.endsWith("/") ? rawBase : `${rawBase}/`;
+
+// The canonical URL of a directory ends in a slash: that is the address Pages
+// actually serves, and the one the published site is checked against.
 const canonical = `${origin}${base}`;
 
 const { render } = await import(join(root, ".ssr", "entry-server.js"));
@@ -29,7 +37,7 @@ const head = [
   `<link rel="canonical" href="${canonical}" />`,
   `<meta property="og:type" content="website" />`,
   `<meta property="og:title" content="hublot, a terminal UI for Docker" />`,
-  `<meta property="og:description" content="htop for a Docker host: live per-container resource usage, Compose projects with drift detection, and disk pruning that shows what it would destroy before it runs." />`,
+  `<meta property="og:description" content="A full-screen terminal UI for Docker: live per-container resource usage, Compose projects with drift detection, and disk pruning that shows what it would destroy before it runs." />`,
   `<meta property="og:url" content="${canonical}" />`,
   `<meta property="og:image" content="${canonical}og.png" />`,
   `<meta name="twitter:card" content="summary_large_image" />`,
