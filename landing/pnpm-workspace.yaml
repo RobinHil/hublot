@@ -1,0 +1,7 @@
+# esbuild, which vite builds with, ships its binary through an install script,
+# and pnpm 11 runs no install script unless it is allowed here by name. This is
+# where the setting lives now: the `pnpm` field of package.json is no longer
+# read, and without this the install ends with ERR_PNPM_IGNORED_BUILDS and vite
+# has nothing to build with.
+allowBuilds:
+  esbuild: true

@@ -1,0 +1,188 @@
+name: Landing
+
+# The page under landing/ has nothing to do with the program: it is a static
+# site, it builds in seconds, and it ships to GitHub Pages rather than to a
+# release. Hence a workflow of its own, triggered only by its own directory, so
+# a Go change never rebuilds it and a wording fix never rebuilds the packages.
+#
+# It needs Pages set to build from GitHub Actions, in Settings > Pages. The
+# configure-pages step reads that configuration rather than assuming an
+# address, which is what lets the base path, the canonical URL and the sitemap
+# stay right under a custom domain.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "landing/**"
+      - ".github/workflows/landing.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "landing/**"
+      - ".github/workflows/landing.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: landing-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Builds the site and proves the build is worth deploying. A pull request
+  # stops here: nothing is published from a branch.
+  build:
+    name: Build and check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: landing
+    steps:
+      - uses: actions/checkout@v7
+
+      # pnpm goes before setup-node, which needs it on the PATH to find the
+      # store it is being asked to cache. The version comes from
+      # `packageManager` in landing/package.json, so the two cannot drift.
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: landing/package.json
+
+      # 24, and never 20: the Pages actions below run on their own runtime, so
+      # they are pinned to releases that ship Node 24 rather than a deprecated
+      # one.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: landing/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck the page
+        run: pnpm typecheck
+
+      # Where the site will live, asked of Pages rather than written down: this
+      # answers correctly for a project site, a user site and a custom domain
+      # alike, and the base path, canonical URL, social card and sitemap are
+      # all derived from it.
+      - uses: actions/configure-pages@v6
+        id: pages
+
+      - name: Build the static site
+        env:
+          SITE_ORIGIN: ${{ steps.pages.outputs.origin }}
+          SITE_BASE: ${{ steps.pages.outputs.base_path }}
+        run: pnpm build
+
+      # What the build is expected to have produced, asserted rather than
+      # assumed. The first of these is the one that matters: the page is
+      # prerendered, and the day that silently stops working the HTML comes out
+      # as an empty mount point that looks fine in a browser and says nothing
+      # to a crawler.
+      - name: Assert the build is complete
+        env:
+          ORIGIN: ${{ steps.pages.outputs.origin }}
+          BASE: ${{ steps.pages.outputs.base_path }}
+        run: |
+          set -euo pipefail
+          cd dist
+
+          for file in index.html 404.html sitemap.xml robots.txt og.png hublot.svg; do
+            test -f "$file" || { echo "::error::missing: $file"; exit 1; }
+          done
+
+          # The page carries its text, not an empty div.
+          grep -q "htop for your Docker host" index.html
+          grep -q "See what a prune would destroy" index.html
+
+          # It references a stylesheet and a bundle, and every asset it names
+          # exists under the hashed name it names it by.
+          grep -q 'assets/[^"]*\.css' index.html || { echo "::error::no stylesheet"; exit 1; }
+          grep -q 'assets/[^"]*\.js' index.html || { echo "::error::no bundle"; exit 1; }
+          for asset in $(grep -oE '/[^"]*assets/[^"]*\.(css|js)' index.html | sort -u); do
+            relative=".${asset#"${BASE%/}"}"
+            test -f "$relative" || { echo "::error::dangling asset: $asset"; exit 1; }
+          done
+
+          # The head a crawler reads, with absolute URLs for the card.
+          grep -q "rel=\"canonical\" href=\"$ORIGIN" index.html
+          grep -q "og:image\" content=\"$ORIGIN" index.html
+          grep -q "$ORIGIN" sitemap.xml
+
+          # The screenshots are real frames kept as text; if the generator ever
+          # writes an empty set, the page still builds and shows nothing.
+          grep -q "blog-worker-1" index.html
+
+          echo "dist is complete:"
+          du -sh .
+          ls -1
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: landing/dist
+
+  # Publishes what the build job checked. Pages requires these permissions and
+  # this environment; the concurrency group is the one Pages deployments share,
+  # and it does not cancel a deployment already in flight.
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
+
+  # Asks the published site the same questions over the network, because a
+  # deployment that reports success and then serves something else is a thing
+  # that happens. It is also the only step that exercises the real base path.
+  verify:
+    name: Verify what is published
+    if: github.event_name != 'pull_request'
+    needs: deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Fetch the published page
+        env:
+          SITE: ${{ needs.deploy.outputs.page_url }}
+        run: |
+          set -euo pipefail
+          site="${SITE%/}"
+          echo "site: $site"
+
+          # Pages usually serves the new version within seconds, but not always
+          # instantly.
+          for attempt in 1 2 3 4 5; do
+            if curl -fsS "$site/" -o /tmp/page.html; then break; fi
+            echo "attempt $attempt failed, waiting"
+            sleep 10
+          done
+
+          curl -fsS "$site/sitemap.xml" -o /tmp/sitemap.xml
+          curl -fsS -o /dev/null "$site/og.png"
+          curl -fsS -o /dev/null "$site/hublot.svg"
+
+          grep -q "htop for your Docker host" /tmp/page.html
+          grep -q "rel=\"canonical\" href=\"$site/\"" /tmp/page.html
+          grep -q "$site/" /tmp/sitemap.xml
+
+          # Anything that is not there gets the site's own 404, which exists
+          # only because the prerender writes one.
+          curl -sS "$site/nothing-here" | grep -q "htop for your Docker host"
+
+          echo "verified $site"

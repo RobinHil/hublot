@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <!-- The social card. Rendered to public/og.png by scripts/og-card.sh. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b0f14"/>
+      <stop offset="1" stop-color="#11161d"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0.25" y1="0" x2="0.75" y2="1">
+      <stop offset="0" stop-color="#6fb7ff"/>
+      <stop offset="0.5" stop-color="#2496ed"/>
+      <stop offset="1" stop-color="#1663a8"/>
+    </linearGradient>
+    <radialGradient id="glass" cx="0.36" cy="0.3" r="0.85">
+      <stop offset="0" stop-color="#153a56"/>
+      <stop offset="1" stop-color="#08192a"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1200" height="6" fill="#2496ed"/>
+
+  <g transform="translate(96 195) scale(0.94)">
+    <circle cx="128" cy="128" r="124" fill="url(#rim)"/>
+    <circle cx="128" cy="128" r="124" fill="none" stroke="#0f4b80" stroke-width="4"/>
+    <g fill="#0f4b80">
+      <circle cx="128" cy="18" r="9"/><circle cx="128" cy="238" r="9"/>
+      <circle cx="18" cy="128" r="9"/><circle cx="238" cy="128" r="9"/>
+    </g>
+    <circle cx="128" cy="128" r="96" fill="url(#glass)"/>
+    <circle cx="128" cy="128" r="96" fill="none" stroke="#0a2b47" stroke-width="7"/>
+    <g fill="#eaf2fa">
+      <rect x="76" y="148" width="104" height="26" rx="5"/>
+      <rect x="76" y="116" width="66" height="26" rx="5"/>
+      <rect x="150" y="116" width="30" height="26" rx="5" opacity="0.55"/>
+      <rect x="94" y="84" width="66" height="26" rx="5" opacity="0.8"/>
+    </g>
+    <path d="M60 78a96 96 0 0 1 42-32" fill="none" stroke="#ffffff"
+          stroke-width="10" stroke-linecap="round" opacity="0.16"/>
+  </g>
+
+  <g font-family="DejaVu Sans, Liberation Sans, sans-serif">
+    <text x="424" y="252" font-size="84" font-weight="600" fill="#c9d3de">hublot</text>
+    <text x="424" y="330" font-size="42" fill="#58a6ff">htop for your Docker host</text>
+    <text x="424" y="402" font-size="27" fill="#8b939e">Live container stats, Compose projects with drift</text>
+    <text x="424" y="444" font-size="27" fill="#8b939e">detection, and prune previews before anything is</text>
+    <text x="424" y="486" font-size="27" fill="#8b939e">destroyed.</text>
+  </g>
+
+  <g font-family="DejaVu Sans Mono, Liberation Mono, monospace">
+    <text x="424" y="556" font-size="24" fill="#8b939e">github.com/RobinHil/hublot</text>
+  </g>
+</svg>

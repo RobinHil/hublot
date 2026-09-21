@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+/* The page borrows the application's own palette, so the screenshots sit in it
+   rather than on it. */
+@theme {
+  --color-ink: #0b0f14;
+  --color-panel: #11161d;
+  --color-edge: #1f2630;
+  --color-mist: #c9d3de;
+  --color-dim: #8b939e;
+  --color-accent: #58a6ff;
+  --color-accent-deep: #2496ed;
+  --color-warn: #d29922;
+  --color-danger: #f85149;
+  --font-mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", "Fira Code",
+    Menlo, Consolas, monospace;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-sans);
+}
+
+/* A terminal frame is a fixed grid of characters: it cannot reflow, and cutting
+   it off would hide the very columns being shown. So the type is sized to the
+   width the frame is given, from the number of columns it was captured at.
+   0.6em is the advance width of a monospace character, with a little slack. */
+.terminal-fit {
+  container-type: inline-size;
+}
+
+.terminal-fit pre {
+  /* Sized to the width it is given, down to a floor: on a phone a 100-column
+     frame would otherwise come out at five pixels. Below the floor the frame
+     scrolls sideways instead, which is the one case where scrolling beats
+     shrinking. */
+  font-size: clamp(9.5px, calc((100cqw - 1.5rem) / (var(--cols) * 0.605)), 13px);
+  width: max-content;
+}
+
+.terminal-fit {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-edge) transparent;
+}
