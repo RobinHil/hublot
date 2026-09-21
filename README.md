@@ -32,7 +32,11 @@ in a terminal.
 | From source | `make build && ./dist/hublot`, with Go 1.22 or newer |
 
 Then `hublot`, or `hublot --read-only` to look at a server without being able
-to change anything. `man hublot` documents the keys and the optional
+to change anything. Access is Docker's own: being in the group that owns the
+socket is what lets you run it without sudo, and hublot adds no check of its
+own. It finds a rootless daemon under `$XDG_RUNTIME_DIR` when there is no root
+one, and says which of the three permission situations you are in when it is
+refused. `man hublot` documents the keys and the optional
 configuration file at `~/.config/hublot/config.yaml`.
 
 ## Keys

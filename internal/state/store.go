@@ -40,7 +40,7 @@ type Store struct {
 	VolumePruneAll bool
 
 	// Stale is set while the event stream is disconnected. The UI keeps showing
-	// the last known state and marks it (AGENTS.md section 11).
+	// the last known state and marks it (AGENTS.md section 12).
 	Stale      bool
 	StaleErr   error
 	LastSync   time.Time

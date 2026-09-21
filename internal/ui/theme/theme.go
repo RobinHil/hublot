@@ -1,6 +1,6 @@
 // Package theme holds every colour and style used by the UI. It is the one
 // place in the codebase allowed a package-level variable
-// (AGENTS.md section 14).
+// (AGENTS.md section 15).
 package theme
 
 import "github.com/charmbracelet/lipgloss"

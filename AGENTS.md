@@ -42,8 +42,15 @@ category.
 
 Out of scope, deliberately:
 
-- **Remote Docker hosts.** Local daemon only, via the default socket. No context
-  switching, no TCP, no SSH transport, and no abstractions "in case" we need them.
+- **Remote Docker hosts.** Local daemon only. No context switching, no TCP, no
+  SSH transport, and no abstractions "in case" we need them.
+
+  Which local socket is still a question, and `ResolveSocket` answers it: what
+  `DOCKER_HOST` names if it is a unix socket, then `/var/run/docker.sock`, then
+  `$XDG_RUNTIME_DIR/docker.sock`, where a rootless installation listens. That is
+  not context switching, it is finding the daemon this machine runs; without the
+  last one a rootless user is told there is no daemon at a path their
+  installation never creates. Do not add context files or a host flag on top.
 - Kubernetes.
 - Any web UI, HTTP server, or telemetry.
 - Swarm, services, nodes, tasks, secrets, configs and plugins; image build and
@@ -473,7 +480,24 @@ A `--read-only` flag disables every mutating action, greys out the corresponding
 keys, and shows a badge in the status bar. This makes `hublot` safe to open on a
 server just to look.
 
-## 11. Error handling
+## 11. Access, and who may use hublot
+
+hublot enforces nothing of its own. The socket's mode is the access control,
+exactly as it is for the docker CLI: a user in the group that owns the socket
+uses hublot without sudo, anyone else is refused by `open()` before a single
+request is sent, and root always gets through. There is no setuid bit, no
+capability and no privileged helper, and there must never be one: anything that
+can open that socket can already mount the host filesystem into a container, so
+a second check here would be theatre.
+
+What the code does add is a diagnosis, in `internal/docker/permission.go`. A
+refusal is one of three situations and they need different answers: not a member
+of the group, a member whose session predates the membership (the case that
+wastes the most time, and the one `newgrp` fixes), or a member who is still
+refused, where the group is not the problem. The wording lives in `groupAdvice`,
+away from the lookups, so each branch is tested without a socket.
+
+## 12. Error handling
 
 - The daemon unreachable at startup is a clear message, not a stack trace: say
   which socket was tried and that the user may lack permission on it.
@@ -483,7 +507,7 @@ server just to look.
   errors are usually informative; do not swallow or rewrite them.
 - Never `panic` in a `tea.Cmd`: recover and turn it into an error message.
 
-## 12. Testing
+## 13. Testing
 
 - `internal/state` and `internal/compose/labels.go` are pure: table-driven tests,
   no Docker required. These carry most of the value.
@@ -498,7 +522,7 @@ server just to look.
   the definition of done asks for.
 - Everything else runs with no daemon at all.
 
-## 13. Build order
+## 14. Build order
 
 Do not build views before the data layer is solid.
 
@@ -516,7 +540,7 @@ Do not build views before the data layer is solid.
 9. **Compose actions**: CLI runner, task panel, drift detection.
 10. Config file, theming, polish.
 
-## 14. Conventions
+## 15. Conventions
 
 - Standard Go layout, `internal/` for everything not meant to be imported.
 - Errors wrapped with `%w` and context; no bare `err` returns across layers.
@@ -529,7 +553,7 @@ Do not build views before the data layer is solid.
 - Commit messages: one line, one sentence, no body, no signature. Never commit or
   push unprompted.
 
-## 15. Definition of done for v1
+## 16. Definition of done for v1
 
 - Opens on a host with 50+ containers and stays responsive.
 - CPU and memory figures match `docker stats` within rounding.
@@ -539,7 +563,7 @@ Do not build views before the data layer is solid.
 - No goroutine leak after 30 minutes of containers starting and stopping.
 - Quitting always restores the terminal, including after exec and after a panic.
 
-## 16. Packaging and release
+## 17. Packaging and release
 
 The project ships native packages, not just a `go build`. Three targets, all
 driven from the `Makefile` so a release is one command:
@@ -587,7 +611,7 @@ Rules:
   machine: each Makefile target checks for its tool and fails with an install
   hint rather than a cryptic error.
 
-## 17. Continuous integration
+## 18. Continuous integration
 
 `.github/workflows/ci.yml` runs on pushes to main, on tags matching `v*`, and on
 pull requests. Its shape is deliberate and worth keeping:
@@ -615,7 +639,7 @@ Package versions cannot be taken from `git describe` verbatim: dpkg refuses a
 version that does not start with a digit, and rpm splits on hyphens. The
 Makefile normalises them; the binary still reports the exact git description.
 
-## 18. Local development
+## 19. Local development
 
 Go is not installed system-wide on this machine. A toolchain lives in the session
 scratchpad; if it is gone, download one (`https://go.dev/dl/`) and extract it

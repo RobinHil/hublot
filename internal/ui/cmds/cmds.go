@@ -57,7 +57,7 @@ type DiskMsg struct {
 }
 
 // ActionDoneMsg reports the outcome of a mutation. The daemon's own message is
-// passed through untouched (AGENTS.md section 11).
+// passed through untouched (AGENTS.md section 12).
 type ActionDoneMsg struct {
 	Label string
 	Err   error
@@ -102,7 +102,7 @@ func Tick() tea.Cmd {
 
 // safely runs a command, turning a panic into an ordinary error message rather
 // than taking the program down with the terminal in raw mode
-// (AGENTS.md section 11).
+// (AGENTS.md section 12).
 func safely(label string, fn func() tea.Msg) tea.Cmd {
 	return func() (msg tea.Msg) {
 		defer func() {

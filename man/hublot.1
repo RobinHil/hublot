@@ -71,7 +71,30 @@ absent. Recognised keys: theme, stop_timeout, max_stat_streams, log_tail, shell,
 read_only, default_sort, sort_descending, confirm_destructive.
 .TP
 .I /var/run/docker.sock
-The daemon socket. If DOCKER_HOST names a unix socket, that one is used instead.
+The daemon socket of a root installation. If DOCKER_HOST names a unix socket,
+that one is used instead; otherwise, when the path above does not exist,
+.I $XDG_RUNTIME_DIR/docker.sock
+is tried, which is where a rootless daemon listens.
+.SH PERMISSIONS
+.B hublot
+enforces nothing of its own: the socket's mode is the access control, exactly as
+it is for
+.BR docker (1).
+A user in the group that owns the socket, usually
+.IR docker ,
+uses hublot without sudo; anyone else is refused before a single request is
+sent, and is told which of the three situations they are in: not in the group,
+in it but from a session that started before the membership was granted, or in
+it and refused for another reason.
+.PP
+Being in that group is equivalent to root on the host, since it allows mounting
+any path into a container. Running
+.B sudo hublot
+works as well, with the usual consequences: the configuration read is root's,
+under
+.IR /root/.config ,
+and files written by saving an image or copying out of a container belong to
+root.
 .SH EXIT STATUS
 .B hublot
 exits with 0 when the interface closes normally, and 1 when the daemon cannot be

@@ -78,7 +78,7 @@ func New(ctx context.Context, client *docker.Client, cfg config.Config, cli comp
 	ctx, cancel := context.WithCancel(ctx)
 
 	// The theme is the one package-level variable in the codebase, set once
-	// here and read everywhere (AGENTS.md section 14).
+	// here and read everywhere (AGENTS.md section 15).
 	theme.Set(theme.ByName(cfg.Theme))
 
 	store := state.New()
@@ -569,7 +569,7 @@ func (a *App) handleEvent(u docker.EventUpdate) tea.Cmd {
 func (a *App) applyContainers(m cmds.ContainersMsg) tea.Cmd {
 	if m.Err != nil {
 		// Keep showing the last known state rather than blanking the screen
-		// (AGENTS.md section 11).
+		// (AGENTS.md section 12).
 		a.store.Stale = true
 		a.store.StaleErr = m.Err
 		a.setMessage(m.Err.Error(), true)
