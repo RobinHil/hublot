@@ -84,8 +84,12 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends desktop-file-utils librsvg2-bin \
-            imagemagick gir1.2-gdkpixbuf-2.0 python3-gi file
+          # librsvg2-common is what installs the gdk-pixbuf SVG loader, and it
+          # is only a recommendation of librsvg2-bin: without it the probe
+          # below fails on a correct file, because nothing can read any SVG.
+          sudo apt-get install -y --no-install-recommends desktop-file-utils \
+            librsvg2-bin librsvg2-common imagemagick gir1.2-gdkpixbuf-2.0 \
+            python3-gi file
           desktop-file-validate packaging/hublot.desktop
 
           # Desktop icon loaders sniff only the first bytes of a file for
