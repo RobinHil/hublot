@@ -133,10 +133,16 @@ export const installs: Install[] = [
     id: "appimage",
     label: "Any distribution",
     note: "The AppImage needs nothing installed: make it executable and run it.",
+    // Two lines rather than one chained with `&&`, because uBlock Origin
+    // refuses a clipboard write where a line starting with `curl` is followed
+    // by `chmod +x` and `&&`, which is what a ClickFix attack looks like. It
+    // does not fail quietly either: it covers the page with a warning about an
+    // attack, which is the last thing an install page should say.
     commands: [
       RESOLVE_VERSION,
       "curl -LO $base/hublot-${version}-x86_64.AppImage",
-      "chmod +x hublot-*.AppImage && ./hublot-*.AppImage",
+      "chmod +x hublot-*.AppImage",
+      "./hublot-*.AppImage",
     ],
   },
   {
