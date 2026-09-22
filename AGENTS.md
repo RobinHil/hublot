@@ -36,6 +36,33 @@ an image pulled by name, and a stack brought up from a compose file that
 nothing has been created from yet. Anything more elaborate than that form
 belongs in a compose file, which is the point of the compose view.
 
+What was created is changed afterwards through the same form, filled with what
+the container is made of. Half of what it asks about, the daemon will change on
+a container as it stands; the other half it reads once, at creation. So an edit
+either applies or rebuilds, and the dialog says which: the container is stopped,
+parked under another name, created again from its own configuration plus the
+change, started, and only then is the old one removed. Anything that fails
+before that last step puts it back the way it was. A field nobody typed over is
+never sent, because a container carries far more than nine fields can show and
+what the form cannot show it must not rewrite. Clearing a limit is a rebuild
+too, which is worth knowing: the update endpoint reads zero as "leave this
+alone", so `--cpus 0` against a container held to one core keeps the core.
+
+What an editing session did is decided by the file's contents before and after,
+never by how the editor exited: quitting with `:q` has to change nothing and
+say so, `:wq` with no edits is not a change either, and a stack created for the
+occasion is taken back out when nothing was written, starter file and directory
+included, touching nothing that was already there. An editor that exits
+non-zero is not an error worth a dialog; one that could not be run at all is.
+
+Files are edited in a real editor rather than in a text box hublot would have
+to grow: `internal/editor` finds one, the app suspends the interface the same
+way it does for a shell, and what happens afterwards is the caller's business,
+which for a compose file is offering to apply it. The choice is asked once and
+written to the configuration, and it comes from `editor` there, then `$VISUAL`
+and `$EDITOR`, then a list of what is installed, terminal editors first. An
+editor that opens a window is given the flag that makes it wait, or hublot
+would return before anything had been typed.
 
 Compose actions apply to the row under the cursor. Each project is a row of its
 own above its services, drawn across the width, and that is the row that means
@@ -49,7 +76,8 @@ overlay states it.
 The coverage of those objects is meant to be complete, and the `x` palette is
 where everything without a dedicated key lives. Containers:
 create and run, start, stop, restart, pause, unpause, kill with a signal,
-remove, rename, update cpu and memory limits, logs, exec, inspect, processes,
+remove, rename, update cpu and memory limits, edit everything else by rebuilding,
+logs, exec, inspect, processes,
 filesystem changes, commit, export, copy files in and out, connect and
 disconnect networks. Images: list, inspect, history, pull by name or again, run
 a container from one, tag, untag, save, load, remove. Volumes: create, list,
@@ -188,6 +216,7 @@ hublot/
       volumes.go              list, inspect, create, rm, usage
       networks.go             list, inspect, create, rm, connect, disconnect
       run.go                  creating and starting a container from a spec
+      edit.go                 reading a container back into a spec, and rebuilding it
       copy.go                 docker cp both ways, with the escape checks
       system.go               df, version, info, prune per category
       events.go               event stream with backoff reconnection
@@ -203,6 +232,7 @@ hublot/
     state/
       store.go                the model's data, reducers, sorting, filtering
       prune.go                prune preview computation
+      edit.go                 what an edit form came back with, against what is there
       parse.go                parsing what people type: sizes, paths, mounts
       diagnose.go             explaining the failures that keep happening
     ui/
@@ -225,6 +255,7 @@ hublot/
       views/
         containers.go compose.go images.go volumes.go networks.go disk.go
         run.go                the container creation form
+        edit.go               the container edit form, and what a rebuild costs
         view.go               the View interface and the requests it sends
     config/config.go          ~/.config/hublot/config.yaml
 ```
@@ -571,8 +602,8 @@ table scrolls sideways, so the horizontal arrows are free), `/` filter, `s` cycl
 close modal, `?` help, `r` force refresh, `q` and `ctrl+c` quit.
 
 Containers: `enter` detail pane, `l` logs, `e` exec shell, `S` stop, `R` restart,
-`P` pause/unpause, `K` kill with signal picker, `D` remove, `x` contextual action
-palette. `s` is taken by sort, so start lives in the palette.
+`P` pause/unpause, `K` kill with signal picker, `D` remove, `E` edit, `x`
+contextual action palette. `s` is taken by sort, so start lives in the palette.
 
 The `x` palette is the escape valve: anything too rare for a dedicated key
 (rename, update limits, connect to network, save image, copy files) lives there,

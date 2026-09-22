@@ -71,6 +71,10 @@ type App struct {
 
 	events <-chan docker.EventUpdate
 
+	// What every view was given, kept because a form the app opens on a view's
+	// behalf is built from the same dependencies the view has.
+	deps views.Deps
+
 	width, height int
 	message       string
 	messageErr    bool
@@ -109,6 +113,7 @@ func New(ctx context.Context, client *docker.Client, cfg config.Config, cli comp
 
 	app := &App{
 		ctx:          ctx,
+		deps:         deps,
 		cancel:       cancel,
 		client:       client,
 		store:        store,
@@ -291,6 +296,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cmds.PruneDoneMsg:
 		return a, a.applyPruneResult(m)
+
+	case cmds.ContainerSpecMsg:
+		// The form cannot be built until the daemon has said what the
+		// container is made of, so the view asks and the answer opens it.
+		if m.Err != nil {
+			a.openModal(components.NewModal(components.SevError,
+				"that container cannot be read", []string{m.Err.Error()}, nil))
+			return a, nil
+		}
+		return a, emit(views.EditFormRequest(a.deps, m.Spec))
 
 	case cmds.InspectMsg:
 		return a, a.showInspect(m)

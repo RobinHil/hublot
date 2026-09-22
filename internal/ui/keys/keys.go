@@ -50,6 +50,7 @@ type Containers struct {
 	Kill    key.Binding
 	Remove  key.Binding
 	New     key.Binding
+	Edit    key.Binding
 	Palette key.Binding
 }
 
@@ -182,6 +183,9 @@ func Default() Map {
 			Kill:    key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "kill")),
 			Remove:  key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "remove")),
 			New:     key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new container")),
+			// Uppercase like the rest of what changes something: an edit can
+			// end in the container being rebuilt.
+			Edit:    key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "edit")),
 			Palette: key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "more")),
 		},
 		Images: Images{
@@ -279,7 +283,7 @@ func (m Map) Sections() []Section {
 			m.Containers.Detail, m.Containers.Logs, m.Containers.Exec,
 			m.Containers.Start, m.Containers.Stop, m.Containers.Restart,
 			m.Containers.Pause, m.Containers.Kill, m.Containers.Remove,
-			m.Containers.New, m.Containers.Palette,
+			m.Containers.New, m.Containers.Edit, m.Containers.Palette,
 		}},
 		{Title: "images", Bindings: []key.Binding{
 			m.Images.Detail, m.Images.History, m.Images.Run, m.Images.Pull,
@@ -324,7 +328,7 @@ func (m Map) Destructive() []key.Binding {
 	return []key.Binding{
 		m.Containers.Start, m.Containers.Stop, m.Containers.Restart,
 		m.Containers.Pause, m.Containers.Kill, m.Containers.Remove,
-		m.Containers.New, m.Containers.Exec,
+		m.Containers.New, m.Containers.Edit, m.Containers.Exec,
 		m.Images.Remove, m.Images.Force, m.Images.Pull,
 		m.Objects.Remove, m.Objects.Force,
 		m.Compose.Up, m.Compose.UpRecreate, m.Compose.Pull, m.Compose.Build,

@@ -544,6 +544,48 @@ func HasImage(ctx context.Context, c *docker.Client, reference string) bool {
 	return c.HasImage(ctx, reference)
 }
 
+// ContainerSpecMsg carries a container read back into the terms it was created
+// with, which is what the edit form is filled from.
+type ContainerSpecMsg struct {
+	Spec docker.ContainerSpec
+	Err  error
+}
+
+// LoadContainerSpec fetches what a container was made of, for editing it.
+func LoadContainerSpec(ctx context.Context, c *docker.Client, id string) tea.Cmd {
+	return safely("reading the container", func() tea.Msg {
+		spec, err := c.ContainerSpecOf(ctx, id)
+		return ContainerSpecMsg{Spec: spec, Err: err}
+	})
+}
+
+// ApplyEdit changes a container where it stands: its name, its restart policy,
+// its limits. Nothing here interrupts what is running.
+func ApplyEdit(ctx context.Context, c *docker.Client, id, name string, e docker.Edit) tea.Cmd {
+	return safely("edit", func() tea.Msg {
+		if err := c.ApplyEdit(ctx, id, e); err != nil {
+			return ActionDoneMsg{Label: "edit " + name, Err: err, Refresh: true}
+		}
+		return ActionDoneMsg{Label: "changed " + name, Refresh: true}
+	})
+}
+
+// RecreateContainer rebuilds a container around the change, for everything the
+// daemon only reads at creation.
+func RecreateContainer(ctx context.Context, c *docker.Client, id, name string,
+	e docker.Edit, timeout time.Duration) tea.Cmd {
+	return safely("recreate", func() tea.Msg {
+		newID, err := c.RecreateContainer(ctx, id, e, timeout)
+		if err != nil {
+			return ActionDoneMsg{Label: "recreate " + name, Err: err, Refresh: true}
+		}
+		return ActionDoneMsg{
+			Label:   fmt.Sprintf("rebuilt %s (%s)", name, docker.ShortID(newID)),
+			Refresh: true,
+		}
+	})
+}
+
 // RemoveProject tears a stack down through the engine API, which is what is
 // left when its compose file is gone: `compose down` needs the file it was
 // started from, and the daemon does not (AGENTS.md section 8.5).

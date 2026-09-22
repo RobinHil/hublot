@@ -22,6 +22,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
+	"github.com/docker/go-connections/nat"
 )
 
 const testImage = "alpine:latest"
@@ -796,5 +797,155 @@ func TestLiveRunContainer(t *testing.T) {
 	}
 	if _, err := c.RunContainer(ctx, RunSpec{}); err == nil {
 		t.Error("a spec with no image must be refused")
+	}
+}
+
+// TestLiveEditContainer covers reading a container back into a spec, changing
+// it where it stands, and rebuilding it. The rebuild is the one operation in
+// this package that destroys something, so what it keeps and what it does when
+// it fails both get checked here.
+func TestLiveEditContainer(t *testing.T) {
+	c, ctx := live(t)
+
+	const name = "hublot-live-edit"
+	exposed, bindings, err := nat.ParsePortSpecs([]string{"18080:80"})
+	if err != nil {
+		t.Fatalf("ports: %v", err)
+	}
+
+	created, err := c.api.ContainerCreate(ctx,
+		&container.Config{
+			Image:        testImage,
+			Cmd:          []string{"sleep", "600"},
+			Env:          []string{"GREETING=hello"},
+			Labels:       map[string]string{"com.example.kept": "yes"},
+			WorkingDir:   "/tmp",
+			ExposedPorts: exposed,
+		},
+		&container.HostConfig{
+			Binds:         []string{"/tmp:/mnt/host:ro"},
+			PortBindings:  bindings,
+			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
+			Resources: container.Resources{
+				NanoCPUs: 1_000_000_000, Memory: 256 << 20, MemorySwap: 256 << 20,
+			},
+		}, nil, nil, name)
+	if err != nil {
+		t.Fatalf("creating %s: %v", name, err)
+	}
+	id := created.ID
+	t.Cleanup(func() { _ = c.RemoveContainer(context.Background(), id, true, true) })
+
+	if err := c.StartContainer(ctx, id); err != nil {
+		t.Fatalf("starting: %v", err)
+	}
+
+	spec, err := c.ContainerSpecOf(ctx, id)
+	if err != nil {
+		t.Fatalf("reading the spec back: %v", err)
+	}
+	if spec.Name != name || spec.Image != testImage || !spec.Running {
+		t.Errorf("spec: %+v", spec)
+	}
+	if len(spec.Env) != 1 || spec.Env[0] != "GREETING=hello" {
+		// The image's own variables, PATH above all, must have been subtracted.
+		t.Errorf("env: got %q, want only what was given", spec.Env)
+	}
+	if len(spec.Ports) != 1 || spec.Ports[0] != "18080:80" {
+		t.Errorf("ports: got %q", spec.Ports)
+	}
+	if len(spec.Mounts) != 1 || spec.Mounts[0] != "/tmp:/mnt/host:ro" {
+		t.Errorf("binds: got %q", spec.Mounts)
+	}
+	if spec.RestartPolicy != "unless-stopped" || spec.NanoCPUs != 1_000_000_000 || spec.Memory != 256<<20 {
+		t.Errorf("limits: %+v", spec)
+	}
+
+	// Changing it where it stands: a rename, a policy and a bigger allowance.
+	renamed, policy := name+"-renamed", "always"
+	cpus, memory := int64(2_000_000_000), int64(384<<20)
+	if err := c.ApplyEdit(ctx, id, Edit{
+		Name: &renamed, RestartPolicy: &policy, NanoCPUs: &cpus, Memory: &memory,
+	}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	spec, err = c.ContainerSpecOf(ctx, id)
+	if err != nil {
+		t.Fatalf("reading back after the update: %v", err)
+	}
+	if spec.Name != renamed || spec.RestartPolicy != policy ||
+		spec.NanoCPUs != cpus || spec.Memory != memory {
+		t.Errorf("the in-place edit did not take: %+v", spec)
+	}
+	if !spec.Running {
+		t.Error("updating limits must not stop the container")
+	}
+
+	// A rebuild that cannot work leaves everything exactly as it was.
+	missing := "hublot-no-such-image:v0"
+	if _, err := c.RecreateContainer(ctx, id, Edit{Image: &missing}, time.Second); err == nil {
+		t.Error("an unknown image must fail the rebuild")
+	}
+	spec, err = c.ContainerSpecOf(ctx, id)
+	if err != nil {
+		t.Fatalf("the container must still be there after a failed rebuild: %v", err)
+	}
+	if spec.Name != renamed || !spec.Running {
+		t.Errorf("a failed rebuild must put the container back: %+v", spec)
+	}
+
+	// The real thing: a new command, everything else carried over.
+	command := []string{"sleep", "900"}
+	newID, err := c.RecreateContainer(ctx, id, Edit{Command: &command}, 3*time.Second)
+	if err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	t.Cleanup(func() { _ = c.RemoveContainer(context.Background(), newID, true, true) })
+	if newID == id {
+		t.Fatal("a rebuild makes another container")
+	}
+
+	rebuilt, err := c.ContainerSpecOf(ctx, newID)
+	if err != nil {
+		t.Fatalf("reading the rebuilt container: %v", err)
+	}
+	if rebuilt.Name != renamed {
+		t.Errorf("the name goes with it: got %q", rebuilt.Name)
+	}
+	if !rebuilt.Running {
+		t.Error("a container that was running comes back running")
+	}
+	if len(rebuilt.Command) != 2 || rebuilt.Command[1] != "900" {
+		t.Errorf("command: got %q", rebuilt.Command)
+	}
+	if rebuilt.Labels["com.example.kept"] != "yes" {
+		t.Errorf("labels are carried over, got %q", rebuilt.Labels)
+	}
+	if len(rebuilt.Env) != 1 || rebuilt.Env[0] != "GREETING=hello" {
+		t.Errorf("env is carried over exactly once: %q", rebuilt.Env)
+	}
+	if len(rebuilt.Ports) != 1 || rebuilt.Ports[0] != "18080:80" {
+		t.Errorf("ports are carried over: %q", rebuilt.Ports)
+	}
+	if len(rebuilt.Mounts) != 1 || rebuilt.Mounts[0] != "/tmp:/mnt/host:ro" {
+		t.Errorf("binds are carried over: %q", rebuilt.Mounts)
+	}
+	if rebuilt.NanoCPUs != cpus || rebuilt.Memory != memory || rebuilt.RestartPolicy != policy {
+		t.Errorf("limits are carried over: %+v", rebuilt)
+	}
+
+	// Anything the form cannot show has to survive too.
+	insp, err := c.api.ContainerInspect(ctx, newID)
+	if err != nil {
+		t.Fatalf("inspecting the rebuilt container: %v", err)
+	}
+	if insp.Config.WorkingDir != "/tmp" {
+		t.Errorf("the working directory is carried over, got %q", insp.Config.WorkingDir)
+	}
+
+	// The old one is gone, name and all.
+	if _, err := c.api.ContainerInspect(ctx, id); err == nil {
+		t.Error("the container that was replaced must have been removed")
 	}
 }

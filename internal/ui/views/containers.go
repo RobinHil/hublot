@@ -208,6 +208,9 @@ func (v *Containers) Update(msg tea.Msg) tea.Cmd {
 		}
 		return request(RunFormRequest(v.deps, ""))
 
+	case key.Matches(km, k.Edit):
+		return v.edit(current, hasCurrent)
+
 	case key.Matches(km, k.Stop):
 		return v.reversible("stop", func(ids []string) tea.Cmd {
 			return cmds.StopContainers(v.deps.Ctx, v.deps.Client, ids, v.deps.StopTimeout)
@@ -238,6 +241,19 @@ func (v *Containers) Update(msg tea.Msg) tea.Cmd {
 	}
 
 	return nil
+}
+
+// edit opens the form that changes an existing container. What it is made of
+// has to be read back from the daemon first: the list carries a name and a
+// state, and an edit needs the configuration behind them.
+func (v *Containers) edit(current docker.Container, hasCurrent bool) tea.Cmd {
+	if !hasCurrent {
+		return nil
+	}
+	if v.deps.ReadOnly {
+		return denied()
+	}
+	return cmds.LoadContainerSpec(v.deps.Ctx, v.deps.Client, current.ID)
 }
 
 // current is the container under the cursor.
@@ -407,6 +423,13 @@ func (v *Containers) palette() tea.Cmd {
 	}
 
 	choices := []components.Choice{
+		{
+			Label: "edit", Detail: "name, limits, image, command, env, ports, volumes",
+			Destructive: true,
+			Payload: func() tea.Cmd {
+				return cmds.LoadContainerSpec(v.deps.Ctx, v.deps.Client, current.ID)
+			},
+		},
 		{
 			Label: "start", Detail: "start the selected container(s)", Destructive: true,
 			Payload: func() tea.Cmd {
@@ -687,7 +710,8 @@ func (v *Containers) Hints() []key.Binding {
 		k.Containers.Logs, k.Containers.Detail, k.Containers.Start,
 		k.Containers.Stop, k.Containers.Restart, v.pauseHint(),
 		k.Containers.Remove, k.Containers.Exec, k.Containers.New,
-		k.Containers.Palette, k.Global.Filter, k.Global.Help, k.Global.Quit,
+		k.Containers.Edit, k.Containers.Palette, k.Global.Filter,
+		k.Global.Help, k.Global.Quit,
 	}
 }
 
