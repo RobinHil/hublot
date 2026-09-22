@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 
 import { Terminal } from "./Terminal";
 import { frames } from "./terminal-frames";
@@ -228,6 +228,8 @@ function Installing() {
  * command exists.
  */
 function CommandBlock({ commands, label }: { commands: string[]; label: string }) {
+  const code = useRef<HTMLElement>(null);
+
   return (
     <div className="relative mt-3">
       <pre className="overflow-x-auto rounded-lg border border-edge bg-panel py-3 pr-20 pl-4 font-mono text-[12.5px] leading-relaxed text-mist">
@@ -237,7 +239,7 @@ function CommandBlock({ commands, label }: { commands: string[]; label: string }
             padding on the side content overflows towards. Sized to its widest
             line, the padding is inside what scrolls and the text keeps its
             margin wherever the block is scrolled to. */}
-        <code className="block w-max">
+        <code ref={code} className="block w-max">
           {commands.map((command) => (
             <div key={command}>
               <span className="mr-2 select-none text-dim">$</span>
@@ -253,7 +255,7 @@ function CommandBlock({ commands, label }: { commands: string[]; label: string }
         aria-hidden
         className="pointer-events-none absolute inset-y-px right-px w-20 rounded-r-lg bg-gradient-to-l from-panel via-panel to-transparent"
       />
-      <CopyButton text={commands.join("\n")} label={label} />
+      <CopyButton text={commands.join("\n")} label={label} source={code} />
     </div>
   );
 }
@@ -265,9 +267,17 @@ function CommandBlock({ commands, label }: { commands: string[]; label: string }
  * meant to read without JavaScript, and a button that cannot do anything is
  * worse than no button at all.
  */
-function CopyButton({ text, label }: { text: string; label: string }) {
+function CopyButton({
+  text,
+  label,
+  source,
+}: {
+  text: string;
+  label: string;
+  source: RefObject<HTMLElement | null>;
+}) {
   const [mounted, setMounted] = useState(false);
-  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const [state, setState] = useState<CopyState>("idle");
 
   useEffect(() => {
     setMounted(true);
@@ -284,23 +294,28 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 
   if (!mounted) return null;
 
-  // The clipboard is refused outside a secure context and by a browser the
-  // user has told to refuse it, and a button that silently does nothing reads
-  // as broken, so the refusal is shown.
+  // Both clipboards can be refused, so both are tried, and when neither
+  // answers the commands are selected instead: a button that silently does
+  // nothing reads as broken, and one that leaves the keyboard a line away from
+  // the same result is still a button that worked.
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(text);
+    if (await writeClipboard(text)) {
       setState("copied");
-    } catch {
-      setState("failed");
+      return;
     }
+    setState(selectContents(source.current) ? "selected" : "failed");
   }
 
   const said = {
     idle: `Copy the ${label} commands`,
     copied: "Copied",
+    selected: "Could not copy: the commands are selected, press ctrl+c",
     failed: "Could not copy: select the commands instead",
   }[state];
+
+  // Three things to draw for four outcomes: a refusal the page worked around
+  // and one it could not look the same, because they read the same.
+  const tone = state === "idle" || state === "copied" ? state : "failed";
 
   return (
     <>
@@ -310,20 +325,82 @@ function CopyButton({ text, label }: { text: string; label: string }) {
         title={said}
         aria-label={said}
         className={`absolute top-2 right-2 rounded-md border border-edge bg-panel p-1.5 transition hover:border-accent hover:text-accent ${
-          state === "copied"
+          tone === "copied"
             ? "text-accent"
-            : state === "failed"
+            : tone === "failed"
               ? "text-danger"
               : "text-dim"
         }`}
       >
-        <CopyIcon state={state} />
+        <CopyIcon state={tone} />
       </button>
       <span aria-live="polite" className="sr-only">
         {state === "idle" ? "" : said}
       </span>
     </>
   );
+}
+
+type CopyState = "idle" | "copied" | "selected" | "failed";
+
+/**
+ * Puts the text on the clipboard through whichever API the browser allows.
+ *
+ * The async clipboard is refused outside a secure context, by a permission
+ * policy, and by anything that hands the page a `navigator.clipboard` that
+ * throws, which is what an extension does when it decides a page has no
+ * business writing there. `execCommand` is deprecated and still implemented
+ * everywhere, and it asks nobody, so it is worth trying before giving up.
+ */
+async function writeClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return writeThroughField(text);
+  }
+}
+
+/**
+ * The older way: a field holding the text, selected, copied, taken back out.
+ *
+ * The field is pushed off-screen rather than hidden, because what is not
+ * rendered cannot be selected, and a field left in view would scroll the page
+ * to itself the moment it takes the selection.
+ */
+function writeThroughField(text: string): boolean {
+  const field = document.createElement("textarea");
+  field.value = text;
+  field.readOnly = true;
+  field.style.cssText = "position:fixed;top:0;left:-9999px;opacity:0";
+  document.body.append(field);
+  field.select();
+
+  let done = false;
+  try {
+    done = document.execCommand("copy");
+  } catch {
+    done = false;
+  }
+
+  field.remove();
+  return done;
+}
+
+/**
+ * Selects what the block says, so the keyboard can finish what the button
+ * could not. The `$` in front of each line is `select-none`, so it stays out
+ * of the selection exactly as it does when the commands are selected by hand.
+ */
+function selectContents(node: HTMLElement | null): boolean {
+  const selection = document.getSelection();
+  if (!node || !selection) return false;
+
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return true;
 }
 
 function CopyIcon({ state }: { state: "idle" | "copied" | "failed" }) {
