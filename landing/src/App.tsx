@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 import { Terminal } from "./Terminal";
 import { frames } from "./terminal-frames";
 import {
@@ -203,16 +205,7 @@ function Installing() {
             <div key={install.id}>
               <h3 className="font-medium text-mist">{install.label}</h3>
               <p className="mt-1 text-sm text-dim">{install.note}</p>
-              <pre className="mt-3 overflow-x-auto rounded-lg border border-edge bg-panel px-4 py-3 font-mono text-[12.5px] leading-relaxed text-mist">
-                <code>
-                  {install.commands.map((command) => (
-                    <div key={command}>
-                      <span className="mr-2 select-none text-dim">$</span>
-                      {command}
-                    </div>
-                  ))}
-                </code>
-              </pre>
+              <CommandBlock commands={install.commands} label={install.label} />
             </div>
           ))}
         </div>
@@ -224,6 +217,135 @@ function Installing() {
         </p>
       </div>
     </section>
+  );
+}
+
+/**
+ * The commands of one install method, with a button that copies them.
+ *
+ * What is copied is the commands alone: the `$` in front of each line marks
+ * where a command starts, and a shell handed it back reports that no such
+ * command exists.
+ */
+function CommandBlock({ commands, label }: { commands: string[]; label: string }) {
+  return (
+    <div className="relative mt-3">
+      <pre className="overflow-x-auto rounded-lg border border-edge bg-panel py-3 pr-20 pl-4 font-mono text-[12.5px] leading-relaxed text-mist">
+        {/* max-content rather than the full width: a line long enough to
+            scroll, which the version-resolving one is, otherwise ends flush
+            against the right border, because a scroll container drops the
+            padding on the side content overflows towards. Sized to its widest
+            line, the padding is inside what scrolls and the text keeps its
+            margin wherever the block is scrolled to. */}
+        <code className="block w-max">
+          {commands.map((command) => (
+            <div key={command}>
+              <span className="mr-2 select-none text-dim">$</span>
+              {command}
+            </div>
+          ))}
+        </code>
+      </pre>
+      {/* A line too long to fit scrolls under the button, and cutting it dead
+          against an opaque square reads as a rendering fault. Fading it out
+          instead says what is true: the line carries on to the right. */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-y-px right-px w-20 rounded-r-lg bg-gradient-to-l from-panel via-panel to-transparent"
+      />
+      <CopyButton text={commands.join("\n")} label={label} />
+    </div>
+  );
+}
+
+/**
+ * Copies a block of commands to the clipboard.
+ *
+ * It appears only once the page has hydrated: the markup is prerendered and
+ * meant to read without JavaScript, and a button that cannot do anything is
+ * worse than no button at all.
+ */
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [mounted, setMounted] = useState(false);
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // The icon says what happened, so it has to go back to saying what the
+  // button does. Clearing on a timer, and clearing it again if the button is
+  // pressed twice, is what the cleanup is for.
+  useEffect(() => {
+    if (state === "idle") return;
+    const timer = setTimeout(() => setState("idle"), 2000);
+    return () => clearTimeout(timer);
+  }, [state]);
+
+  if (!mounted) return null;
+
+  // The clipboard is refused outside a secure context and by a browser the
+  // user has told to refuse it, and a button that silently does nothing reads
+  // as broken, so the refusal is shown.
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setState("copied");
+    } catch {
+      setState("failed");
+    }
+  }
+
+  const said = {
+    idle: `Copy the ${label} commands`,
+    copied: "Copied",
+    failed: "Could not copy: select the commands instead",
+  }[state];
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={copy}
+        title={said}
+        aria-label={said}
+        className={`absolute top-2 right-2 rounded-md border border-edge bg-panel p-1.5 transition hover:border-accent hover:text-accent ${
+          state === "copied"
+            ? "text-accent"
+            : state === "failed"
+              ? "text-danger"
+              : "text-dim"
+        }`}
+      >
+        <CopyIcon state={state} />
+      </button>
+      <span aria-live="polite" className="sr-only">
+        {state === "idle" ? "" : said}
+      </span>
+    </>
+  );
+}
+
+function CopyIcon({ state }: { state: "idle" | "copied" | "failed" }) {
+  const path = {
+    idle: "M9 9h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1",
+    copied: "m4 12.5 5 5L20 6.5",
+    failed: "M6 6l12 12M18 6 6 18",
+  }[state];
+
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="size-4"
+    >
+      <path d={path} />
+    </svg>
   );
 }
 
