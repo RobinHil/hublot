@@ -36,21 +36,6 @@ an image pulled by name, and a stack brought up from a compose file that
 nothing has been created from yet. Anything more elaborate than that form
 belongs in a compose file, which is the point of the compose view.
 
-What an editing session did is decided by the file's contents before and after,
-never by how the editor exited: quitting with `:q` has to change nothing and
-say so, `:wq` with no edits is not a change either, and a stack created for the
-occasion is taken back out when nothing was written, starter file and directory
-included, touching nothing that was already there. An editor that exits
-non-zero is not an error worth a dialog; one that could not be run at all is.
-
-Files are edited in a real editor rather than in a text box hublot would have
-to grow: `internal/editor` finds one, the app suspends the interface the same
-way it does for a shell, and what happens afterwards is the caller's business,
-which for a compose file is offering to apply it. The choice is asked once and
-written to the configuration, and it comes from `editor` there, then `$VISUAL`
-and `$EDITOR`, then a list of what is installed, terminal editors first. An
-editor that opens a window is given the flag that makes it wait, or hublot
-would return before anything had been typed.
 
 Compose actions apply to the row under the cursor. Each project is a row of its
 own above its services, drawn across the width, and that is the row that means
@@ -443,6 +428,16 @@ Three cases the UI must handle distinctly:
 2. **Project whose `config_files` no longer exist on disk.** Detect with
    `os.Stat`. Mark as orphaned and restrict actions to what the Engine API can do
    directly (stop, rm); a `compose down` without its files fails.
+
+   Those actions keep their keys rather than hiding: `S`, `R`, `D` and `X` on an
+   orphaned stack go through the engine instead of the binary, and work on a
+   host where compose is not installed at all. A removal takes the containers,
+   then the networks, then the volumes if `X` asked for them, in that order,
+   because a network still holding an endpoint and a volume a container still
+   has are both refused. It names every object it is about to destroy, and it
+   carries on past a refusal rather than stopping at the first one: what could
+   go has gone by the time the failure is reported. Nothing brings such a stack
+   up again, and `u` still says so.
 3. **`oneoff=True` containers**, leftovers from `compose run`. List them
    separately in the Disk view. Nobody ever cleans these up.
 
@@ -587,7 +582,8 @@ Compose: `u` / `U` up -d / up -d --force-recreate, `p` / `b` pull / build, `S` /
 `R` stop / restart stack, `l` logs of the row, `L` logs of the stack, `+` / `-`
 scale selected service, `v` read the compose file, `E` edit it, `c` show
 resolved config, `d` check drift, `n` a new or existing stack, `enter` fold,
-`D` down, `X` down -v --remove-orphans.
+`D` down, `X` down -v --remove-orphans. On a stack whose file is gone, `S`, `R`,
+`D` and `X` mean the same thing through the engine API instead.
 
 ### 9.3 Task panel
 

@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/RobinHil/hublot/internal/compose"
+	"github.com/RobinHil/hublot/internal/docker"
 	"github.com/RobinHil/hublot/internal/state"
 	"github.com/RobinHil/hublot/internal/ui/cmds"
 	"github.com/RobinHil/hublot/internal/ui/components"
@@ -209,7 +210,7 @@ func (v *Compose) Update(msg tea.Msg) tea.Cmd {
 		return nil
 	}
 
-	if !v.deps.CLI.Available && needsCLI(km, k) {
+	if !v.deps.CLI.Available && needsCLI(km, k) && !engineHandles(km, k, p) {
 		// Compose actions were disabled at startup rather than failing here
 		// (AGENTS.md section 8.2).
 		return v.info("compose actions are unavailable", []string{v.deps.CLI.Reason})
@@ -280,9 +281,15 @@ func (v *Compose) Update(msg tea.Msg) tea.Cmd {
 		return v.run(p, "build", []string{"build"})
 
 	case key.Matches(km, k.Stop):
+		if !p.Actionable() {
+			return v.engineStop(p, service)
+		}
 		return v.run(p, scopedTitle("stop", service.Name), scopedArgs(service.Name, "stop"))
 
 	case key.Matches(km, k.Restart):
+		if !p.Actionable() {
+			return v.engineRestart(p, service)
+		}
 		return v.run(p, scopedTitle("restart", service.Name), scopedArgs(service.Name, "restart"))
 
 	case key.Matches(km, k.ScaleUp):
@@ -292,9 +299,15 @@ func (v *Compose) Update(msg tea.Msg) tea.Cmd {
 		return v.scale(p, service, -1)
 
 	case key.Matches(km, k.Down):
+		if !p.Actionable() {
+			return v.engineDown(p, false)
+		}
 		return v.downConfirm(p, false)
 
 	case key.Matches(km, k.DownVolumes):
+		if !p.Actionable() {
+			return v.engineDown(p, true)
+		}
 		return v.downConfirm(p, true)
 	}
 	return nil
@@ -309,6 +322,22 @@ func needsCLI(km tea.KeyMsg, k keys.Compose) bool {
 		k.Up, k.UpRecreate, k.Pull, k.Build, k.Stop, k.Restart,
 		k.ScaleUp, k.ScaleDown, k.Config, k.Drift, k.Down, k.DownVolumes,
 	} {
+		if key.Matches(km, b) {
+			return true
+		}
+	}
+	return false
+}
+
+// engineHandles reports whether a key on this project goes through the engine
+// API rather than the compose binary, which is the case for a stack that has
+// lost its file: nothing can bring it up again, and everything it left behind
+// can still be stopped and removed without compose being installed at all.
+func engineHandles(km tea.KeyMsg, k keys.Compose, p compose.Project) bool {
+	if p.Actionable() {
+		return false
+	}
+	for _, b := range []key.Binding{k.Stop, k.Restart, k.Down, k.DownVolumes} {
 		if key.Matches(km, b) {
 			return true
 		}
@@ -375,16 +404,141 @@ func (v *Compose) confirmRun(p compose.Project, title string, args, body []strin
 	})
 }
 
-// orphanExplanation says why a stack cannot be acted on through the CLI, and
-// what is left (AGENTS.md section 8.5).
+// orphanExplanation says why a stack cannot be brought up through the CLI, and
+// what is left that can be done to it (AGENTS.md section 8.5).
 func (v *Compose) orphanExplanation(p compose.Project) tea.Cmd {
 	return v.info("compose file missing for "+p.Name, []string{
 		missingFiles(p),
 		"",
-		"Compose needs the file it was started from, so up, down and build cannot run.",
-		"The containers, volumes and networks of this project can still be stopped and removed",
-		"from the other views, which go through the engine API directly.",
+		"Compose needs the file it was started from, so up, pull and build cannot run.",
+		"What it left behind is still ordinary containers, networks and volumes:",
+		"S stops them, R restarts them, D removes them, and X takes the volumes too.",
+		"Those go through the engine API, which needs no file.",
 	})
+}
+
+// engineTargets is what an action applies to when compose cannot be used: the
+// containers of the service under the cursor, or all of the stack's from the
+// project line, which is the same rule as everywhere else in this view.
+func engineTargets(p compose.Project, s compose.Service) []docker.Container {
+	if s.Name != "" {
+		return s.Containers
+	}
+	return p.Containers()
+}
+
+// engineStop stops what is running of an orphaned stack.
+func (v *Compose) engineStop(p compose.Project, s compose.Service) tea.Cmd {
+	if v.deps.ReadOnly {
+		return denied()
+	}
+
+	var targets []docker.Container
+	for _, c := range engineTargets(p, s) {
+		if c.Running() {
+			targets = append(targets, c)
+		}
+	}
+	if len(targets) == 0 {
+		return announce("nothing of " + p.Name + " is running")
+	}
+	return cmds.StopContainers(v.deps.Ctx, v.deps.Client, ids(targets), v.deps.StopTimeout)
+}
+
+// engineRestart restarts an orphaned stack's containers, which starts the
+// stopped ones as the compose command would.
+func (v *Compose) engineRestart(p compose.Project, s compose.Service) tea.Cmd {
+	if v.deps.ReadOnly {
+		return denied()
+	}
+
+	targets := engineTargets(p, s)
+	if len(targets) == 0 {
+		return announce("nothing is left of " + p.Name + " to restart")
+	}
+	return cmds.RestartContainers(v.deps.Ctx, v.deps.Client, ids(targets), v.deps.StopTimeout)
+}
+
+// engineDown removes what a stack left behind, for the stacks `compose down`
+// refuses because their file is gone. It names every object first: this is a
+// removal like any other, and the dialog says what goes (AGENTS.md 10.1).
+func (v *Compose) engineDown(p compose.Project, withVolumes bool) tea.Cmd {
+	if v.deps.ReadOnly {
+		return denied()
+	}
+
+	containers, networks := p.Containers(), p.Networks
+	volumes := p.Volumes
+	if !withVolumes {
+		volumes = nil
+	}
+	if len(containers) == 0 && len(networks) == 0 && len(volumes) == 0 {
+		return v.info("nothing left to remove of "+p.Name, []string{
+			"Its volumes are still here, which X removes along with the rest.",
+		})
+	}
+
+	body := []string{
+		missingFiles(p),
+		"",
+		"Compose cannot take a stack down without the file it was started from,",
+		"so what it left behind is removed through the engine API instead.",
+		"",
+	}
+	body = append(body, inventory(containers, networks, volumes)...)
+
+	sev := components.SevDanger
+	if withVolumes && len(volumes) > 0 {
+		// Volumes are the data, so this is the case that asks for a word
+		// rather than a keypress.
+		sev = components.SevTyped
+		body = append(body, "", "There is no undo.")
+	} else if !withVolumes && len(p.Volumes) > 0 {
+		// Named, like everything else here: which volume survives is the
+		// difference between D and X, and a count does not say it.
+		body = append(body, "", "Kept, as compose down keeps them. X removes these too:")
+		for _, vol := range p.Volumes {
+			body = append(body, fmt.Sprintf("  %-28s %s", vol.Name, state.FormatBytes(vol.Size)))
+		}
+	}
+
+	return request(ConfirmRequest{
+		Severity: sev,
+		Title:    fmt.Sprintf("Remove what is left of %s", p.Name),
+		Body:     body,
+		Run: func() tea.Cmd {
+			return cmds.RemoveProject(v.deps.Ctx, v.deps.Client, p, withVolumes)
+		},
+	})
+}
+
+// inventory lists what a removal is about to destroy, object by object. A
+// count would not do: the point of the dialog is that the names are read.
+func inventory(containers []docker.Container, networks []docker.Network, volumes []docker.Volume) []string {
+	var out []string
+	if len(containers) > 0 {
+		out = append(out, plural(len(containers), "container")+":")
+		for _, c := range containers {
+			out = append(out, fmt.Sprintf("  %-28s %s", c.Name, formatStatus(c)))
+		}
+	}
+	if len(networks) > 0 {
+		out = append(out, plural(len(networks), "network")+":")
+		for _, n := range networks {
+			out = append(out, fmt.Sprintf("  %-28s %s", n.Name, n.Driver))
+		}
+	}
+	if len(volumes) > 0 {
+		header := plural(len(volumes), "volume") + ", and their contents:"
+		if len(volumes) == 1 {
+			header = "1 volume, and its contents:"
+		}
+		out = append(out, header)
+		for _, vol := range volumes {
+			out = append(out, fmt.Sprintf("  %-28s %s", vol.Name, state.FormatBytes(vol.Size)))
+		}
+	}
+	return out
 }
 
 // scale changes a service's replica count.

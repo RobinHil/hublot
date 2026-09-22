@@ -248,6 +248,11 @@ func Default() Map {
 type Section struct {
 	Title    string
 	Bindings []key.Binding
+	// Notes are the sentences a section needs that are not bindings: a rule
+	// worth stating once, above the keys it governs. They are laid out across
+	// the width rather than into a column, because a rule cut off at
+	// twenty-six characters is not a rule anybody can follow.
+	Notes []string
 }
 
 // Sections lists every binding, grouped, for the help overlay. Adding a binding
@@ -267,7 +272,8 @@ func (m Map) Sections() []Section {
 			key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "select the row under the cursor")),
 			key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "select everything the filter left")),
 			key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear the selection")),
-			key.NewBinding(key.WithKeys(""), key.WithHelp("then", "S, R, D and the rest act on all of them")),
+		}, Notes: []string{
+			"Once rows are selected, S, R, D and the rest act on all of them at once.",
 		}},
 		{Title: "containers", Bindings: []key.Binding{
 			m.Containers.Detail, m.Containers.Logs, m.Containers.Exec,
@@ -282,8 +288,11 @@ func (m Map) Sections() []Section {
 		{Title: "volumes and networks", Bindings: []key.Binding{
 			m.Objects.Detail, m.Objects.Remove, m.Objects.Force, m.Objects.Palette,
 		}},
-		{Title: "compose, where actions apply to the row under the cursor", Bindings: []key.Binding{
-			key.NewBinding(key.WithKeys(""), key.WithHelp("note", "the project line folds the stack and acts on all of it; a service line acts on that service")),
+		{Title: "compose, where actions apply to the row under the cursor", Notes: []string{
+			"The project line folds the stack and acts on all of it; a service line acts on that service.",
+			"A stack whose compose file is gone cannot be brought up, but S, R, D and X still stop and " +
+				"remove what it left behind, through the engine API.",
+		}, Bindings: []key.Binding{
 			m.Compose.Expand, m.Compose.New, m.Compose.View, m.Compose.Edit, m.Compose.Up, m.Compose.UpRecreate, m.Compose.Pull,
 			m.Compose.Build, m.Compose.Stop, m.Compose.Restart,
 			m.Compose.Logs, m.Compose.LogsAll,

@@ -543,3 +543,68 @@ func RunContainer(ctx context.Context, c *docker.Client, spec docker.RunSpec) te
 func HasImage(ctx context.Context, c *docker.Client, reference string) bool {
 	return c.HasImage(ctx, reference)
 }
+
+// RemoveProject tears a stack down through the engine API, which is what is
+// left when its compose file is gone: `compose down` needs the file it was
+// started from, and the daemon does not (AGENTS.md section 8.5).
+//
+// The order is the one compose itself follows, and it is not a preference: a
+// network with an endpoint on it and a volume a container still holds are both
+// refused, so the containers go first.
+func RemoveProject(ctx context.Context, c *docker.Client, p compose.Project, withVolumes bool) tea.Cmd {
+	return safely("remove project", func() tea.Msg {
+		var (
+			done  []string
+			first error
+		)
+		note := func(kind string, n int) {
+			if n > 0 {
+				done = append(done, fmt.Sprintf("%d %s", n, kind))
+			}
+		}
+		keep := func(err error) {
+			if err != nil && first == nil {
+				first = err
+			}
+		}
+
+		var containers, networks, volumes int
+		for _, container := range p.Containers() {
+			if err := c.RemoveContainer(ctx, container.ID, true, false); err != nil {
+				keep(err)
+				continue
+			}
+			containers++
+		}
+		for _, n := range p.Networks {
+			if err := c.RemoveNetwork(ctx, n.ID); err != nil {
+				keep(err)
+				continue
+			}
+			networks++
+		}
+		if withVolumes {
+			for _, v := range p.Volumes {
+				if err := c.RemoveVolume(ctx, v.Name, false); err != nil {
+					keep(err)
+					continue
+				}
+				volumes++
+			}
+		}
+
+		note("container(s)", containers)
+		note("network(s)", networks)
+		note("volume(s)", volumes)
+
+		label := "removed nothing of " + p.Name
+		if len(done) > 0 {
+			label = fmt.Sprintf("%s: removed %s", p.Name, strings.Join(done, ", "))
+		}
+
+		// Everything that could go is gone before the failure is reported: a
+		// teardown that stopped at the first refusal would leave the rest of
+		// the stack behind and say nothing about it.
+		return ActionDoneMsg{Label: label, Err: first, Refresh: true}
+	})
+}

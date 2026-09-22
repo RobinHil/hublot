@@ -43,7 +43,7 @@ func HelpOverlay(k keys.Map, readOnly bool, width, height, offset int) (string, 
 		perLine = 1
 	}
 
-	lines := helpLines(k, disabled, perLine)
+	lines := helpLines(k, disabled, perLine, inner)
 
 	// Two lines for the title, two for the border, one for the footer.
 	visible := height - 6
@@ -85,8 +85,9 @@ func HelpOverlay(k keys.Map, readOnly bool, width, height, offset int) (string, 
 	return s.Modal.Width(inner).Render(b.String()), maxOffset
 }
 
-// helpLines lays every section out into fixed-width columns.
-func helpLines(k keys.Map, disabled map[string]bool, perLine int) []string {
+// helpLines lays every section out into fixed-width columns, with its notes
+// across the whole width above them.
+func helpLines(k keys.Map, disabled map[string]bool, perLine, inner int) []string {
 	s := theme.Current()
 
 	var lines []string
@@ -95,6 +96,13 @@ func helpLines(k keys.Map, disabled map[string]bool, perLine int) []string {
 			lines = append(lines, "")
 		}
 		lines = append(lines, s.Accent.Render(section.Title))
+
+		for _, note := range section.Notes {
+			// A sentence wraps where a binding must not: it is read as a
+			// sentence, and cutting it is what made it useless.
+			wrapped := s.Help.Width(inner - 2).Render(note)
+			lines = append(lines, strings.Split(wrapped, "\n")...)
+		}
 
 		var row []string
 		for _, bind := range section.Bindings {
