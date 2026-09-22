@@ -11,7 +11,7 @@
 # version resets pkgrel to 1, as here.
 
 pkgname=hublot
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Terminal UI for a local Docker daemon, with compose awareness and prune previews"
 arch=('x86_64' 'aarch64')
@@ -28,7 +28,7 @@ optdepends=(
 makedepends=('go' 'git')
 
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('207d252daaae64853b8e35e9aaefd82e78aa41b91cb334e47e09ad671363fe06')
+sha256sums=('32489551d9637e28c8679a33f905a96df79ff2b48ee4a3e3b4e1979f0b96feca')
 
 build() {
   cd "$pkgname-$pkgver"
