@@ -300,6 +300,11 @@ jobs:
       # from this checkout, under the exact name and prefix build() unpacks.
       # Only the provenance of the sources changes; build(), check() and
       # package() run byte for byte as an AUR user runs them.
+      #
+      # The checksum goes with the source line: it is the released tarball's,
+      # and a tarball made here is a different file, so leaving it in place
+      # fails validation before anything is compiled. SKIP is right because
+      # what makepkg would be checking against is this very checkout.
       - name: Point the PKGBUILD at this checkout
         run: |
           set -euo pipefail
@@ -310,8 +315,9 @@ jobs:
             -o "packaging/aur/hublot-$pkgver.tar.gz" HEAD
 
           cd packaging/aur
-          sed -i 's|^source=.*|source=("$pkgname-$pkgver.tar.gz")|' PKGBUILD
-          echo "--- the one line that differs from the published PKGBUILD ---"
+          sed -i -e 's|^source=.*|source=("$pkgname-$pkgver.tar.gz")|' \
+                 -e "s|^sha256sums=.*|sha256sums=('SKIP')|" PKGBUILD
+          echo "--- the two lines that differ from the published PKGBUILD ---"
           grep -E '^(source|sha256sums)=' PKGBUILD
 
       - name: Create the user makepkg insists on

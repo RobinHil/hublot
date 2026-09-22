@@ -167,7 +167,10 @@ arch:
 	# working tree, uncommitted and untracked files included, because the whole
 	# point of building locally is to install what is on disk right now.
 	# Only pkgver and the source line differ from what the AUR carries;
-	# build(), check() and package() run byte for byte.
+	# build(), check() and package() run byte for byte. The checksum follows
+	# the source: the published one is the released tarball's, and this
+	# tarball is a different file, so it is skipped rather than failing
+	# validation against a release this build is not made from.
 	git ls-files -z --cached --others --exclude-standard \
 		| tar --null -T - -cf - \
 		| tar -xf - -C $(DIST)/aur/$(BINARY)-$(PKGVER)
@@ -175,6 +178,7 @@ arch:
 		-C $(DIST)/aur $(BINARY)-$(PKGVER)
 	sed -e 's|^pkgver=.*|pkgver=$(PKGVER)|' \
 	    -e 's|^source=.*|source=("$$pkgname-$$pkgver.tar.gz")|' \
+	    -e "s|^sha256sums=.*|sha256sums=('SKIP')|" \
 		packaging/aur/PKGBUILD > $(DIST)/aur/PKGBUILD
 	cd $(DIST)/aur && makepkg --force --noconfirm
 	mv $(DIST)/aur/$(BINARY)-$(PKGVER)-*.pkg.tar.zst $(DIST)/

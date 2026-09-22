@@ -33,3 +33,12 @@ go.work.sum
 
 # Build output
 dist/
+
+# makepkg leftovers: updpkgsums downloads the release tarball next to the
+# PKGBUILD to checksum it, and a build run there leaves src/ and pkg/ behind.
+# None of it belongs in the repository, the tarball least of all: it is the
+# published release, fetched again by anyone who builds the recipe.
+packaging/aur/*.tar.gz
+packaging/aur/*.pkg.tar.zst
+packaging/aur/src/
+packaging/aur/pkg/
