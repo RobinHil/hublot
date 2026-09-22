@@ -107,10 +107,15 @@ func gaugeLine(d Dashboard, width int) string {
 }
 
 const (
-	// betweenGauges separates the two blocks, besideStates keeps the dots off
-	// the memory figure.
+	// betweenGauges separates the two gauges, besideStates keeps the pair of
+	// them off the dots. That one is much the wider, and deliberately: it is
+	// the seam between two different things rather than between two readings
+	// of the same kind, and it is the only gap the graphs grow into. Every two
+	// columns given to it cost one from each graph, which is a trade worth
+	// making: a graph a little shorter reads the same, a dashboard with no air
+	// in it reads as one block.
 	betweenGauges = 3
-	besideStates  = 2
+	besideStates  = 8
 	// minSpark is the shortest graph worth drawing; under it the line is
 	// better off without one.
 	minSpark = 8
