@@ -15,6 +15,7 @@ import (
 	"github.com/RobinHil/hublot/internal/compose"
 	"github.com/RobinHil/hublot/internal/config"
 	"github.com/RobinHil/hublot/internal/docker"
+	"github.com/RobinHil/hublot/internal/swarm"
 	"github.com/RobinHil/hublot/internal/ui"
 )
 
@@ -63,8 +64,9 @@ func run() error {
 	defer func() { _ = client.Close() }()
 
 	cli := compose.Detect(ctx)
+	swarmCLI := swarm.Detect(ctx)
 
-	app := ui.New(ctx, client, cfg, cli, cfg.ReadOnly)
+	app := ui.New(ctx, client, cfg, cli, swarmCLI, cfg.ReadOnly)
 
 	program := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithContext(ctx))
 	if _, err := program.Run(); err != nil {

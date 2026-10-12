@@ -72,6 +72,17 @@ func NewModal(sev Severity, title string, body []string, payload any) Modal {
 	return m
 }
 
+// SetWord changes what a typed confirmation asks for. A word that names the
+// thing being destroyed is harder to type by reflex than "delete".
+func (m *Modal) SetWord(word string) {
+	if m.Severity != SevTyped || word == "" {
+		return
+	}
+	m.Word = word
+	m.input.Prompt = "type " + word + " to confirm: "
+	m.input.CharLimit = len(word) + 20
+}
+
 // SetSize records the space available, so long bodies wrap sensibly.
 func (m *Modal) SetSize(width, _ int) { m.width = width }
 

@@ -50,6 +50,7 @@ func toNetwork(r network.Summary) Network {
 		Internal:   r.Internal,
 		Attachable: r.Attachable,
 		IPv6:       r.EnableIPv6,
+		Ingress:    r.Ingress,
 		Subnets:    subnets,
 		Labels:     r.Labels,
 	}
@@ -98,12 +99,38 @@ func (c *Client) PruneNetworks(ctx context.Context) (PruneReport, error) {
 	return PruneReport{Category: "networks", Deleted: rep.NetworksDeleted}, nil
 }
 
-// CreateNetwork makes a user-defined bridge network, which is what a network
-// created by hand is almost always for: letting a few containers find each
-// other by name.
-func (c *Client) CreateNetwork(ctx context.Context, name string) error {
-	if _, err := c.api.NetworkCreate(ctx, name, network.CreateOptions{Driver: "bridge"}); err != nil {
-		return fmt.Errorf("creating network %s: %w", name, err)
+// NetworkSpec is what creating a network asks for.
+type NetworkSpec struct {
+	Name string
+	// Driver is "bridge" for one machine, "overlay" for a swarm.
+	Driver     string
+	Attachable bool
+	Internal   bool
+	// Encrypted turns on IPsec between nodes, for overlay networks only.
+	Encrypted bool
+	Subnet    string
+}
+
+// CreateNetwork makes a user-defined network. A bridge is what a network
+// created by hand is usually for, letting a few containers find each other by
+// name; an overlay spans the nodes of a swarm.
+func (c *Client) CreateNetwork(ctx context.Context, spec NetworkSpec) error {
+	opts := network.CreateOptions{
+		Driver:     orDefault(spec.Driver, "bridge"),
+		Attachable: spec.Attachable,
+		Internal:   spec.Internal,
+	}
+	if spec.Driver == "overlay" {
+		opts.Scope = "swarm"
+		if spec.Encrypted {
+			opts.Options = map[string]string{"encrypted": ""}
+		}
+	}
+	if spec.Subnet != "" {
+		opts.IPAM = &network.IPAM{Config: []network.IPAMConfig{{Subnet: spec.Subnet}}}
+	}
+	if _, err := c.api.NetworkCreate(ctx, spec.Name, opts); err != nil {
+		return fmt.Errorf("creating network %s: %w", spec.Name, err)
 	}
 	return nil
 }

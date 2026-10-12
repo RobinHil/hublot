@@ -42,6 +42,14 @@ func NewPrompt(title string, body []string, label, initial string, payload any) 
 	return Prompt{Title: title, Body: body, Payload: payload, input: in}
 }
 
+// Mask hides what is typed, for an unlock key or a secret's value: whatever
+// is on screen can be read over a shoulder or caught by a screen recording.
+func (p *Prompt) Mask() {
+	p.input.EchoMode = textinput.EchoPassword
+	p.input.EchoCharacter = '*'
+	p.input.CharLimit = 0
+}
+
 // SetSize records the space available.
 func (p *Prompt) SetSize(width, _ int) { p.width = width }
 

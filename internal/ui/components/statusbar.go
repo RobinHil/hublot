@@ -69,3 +69,37 @@ func TabAt(titles []string, x int, compact bool) (int, bool) {
 	}
 	return 0, false
 }
+
+// Segments draws the sections of a view on one line, the active one
+// highlighted. Unlike the tabs they carry no digits: the digits switch views,
+// and a second set of numbers on the screen would read as the same keys.
+func Segments(titles []string, active int, width int) string {
+	s := theme.Current()
+
+	var rendered []string
+	for i, t := range titles {
+		if i == active {
+			rendered = append(rendered, s.TabActive.Render(" "+t+" "))
+			continue
+		}
+		rendered = append(rendered, s.Tab.Render(" "+t+" "))
+	}
+	bar := strings.Join(rendered, "")
+	if lipgloss.Width(bar) > width {
+		return ansi.Truncate(bar, width, "")
+	}
+	return bar
+}
+
+// SegmentAt maps a click column on the segment line back to a section.
+func SegmentAt(titles []string, x int) (int, bool) {
+	cursor := 0
+	for i, t := range titles {
+		width := len(t) + 2
+		if x >= cursor && x < cursor+width {
+			return i, true
+		}
+		cursor += width
+	}
+	return 0, false
+}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/RobinHil/hublot/internal/compose"
 	"github.com/RobinHil/hublot/internal/docker"
+	"github.com/RobinHil/hublot/internal/swarm"
 )
 
 // historyLen is how many samples the sparklines keep. The header stretches its
@@ -23,6 +24,23 @@ type Store struct {
 	Volumes    []docker.Volume
 	Networks   []docker.Network
 	Projects   []compose.Project
+
+	// The swarm, as a manager sees it. Empty on a node that is not one: a
+	// worker is refused every one of these lists (see swarm.go).
+	Services []docker.Service
+	Tasks    []docker.Task
+	Nodes    []docker.Node
+	Secrets  []docker.Secret
+	Configs  []docker.Config
+	Stacks   []swarm.Stack
+	Cluster  *docker.Cluster
+	// SwarmErr is the last refusal from a swarm listing, shown rather than
+	// an empty list that would read as "nothing deployed".
+	SwarmErr error
+	SwarmCLI swarm.CLI
+	// StackFiles remembers which files each stack was deployed from, since
+	// the deploy records it nowhere.
+	StackFiles map[string][]string
 
 	// Disk is nil until the user asks for it: `system df` is too slow to poll
 	// (AGENTS.md section 6.6).
@@ -60,6 +78,7 @@ func New() *Store {
 		Stats:      map[string]docker.Stats{},
 		CPUHistory: map[string][]float64{},
 		MemHistory: map[string][]float64{},
+		StackFiles: map[string][]string{},
 	}
 }
 
@@ -86,6 +105,7 @@ func (s *Store) SetVolumes(vs []docker.Volume) {
 func (s *Store) SetNetworks(ns []docker.Network) {
 	s.Networks = ns
 	s.rebuildProjects()
+	s.rebuildStacks()
 }
 
 // SetDisk stores a `system df` result. Volume sizes only exist here, so they
@@ -327,6 +347,8 @@ func (s *Store) SnapshotForPrune(until time.Duration) Snapshot {
 		Volumes:                 s.Volumes,
 		Networks:                s.Networks,
 		BuildCache:              cache,
+		Services:                s.Services,
+		SwarmManager:            s.SwarmManaged(),
 		Until:                   until,
 		VolumePruneAllSupported: s.VolumePruneAll,
 	}

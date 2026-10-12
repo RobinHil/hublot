@@ -43,6 +43,7 @@ func (c *Client) Info(ctx context.Context) (Info, error) {
 		Stopped:       info.ContainersStopped,
 		Images:        info.Images,
 		DockerRootDir: info.DockerRootDir,
+		Swarm:         toSwarmState(info.Swarm),
 	}, nil
 }
 

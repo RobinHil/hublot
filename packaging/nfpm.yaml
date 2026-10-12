@@ -17,7 +17,8 @@ description: |
   Terminal UI for a local Docker daemon.
   Live per-container resource usage, keyboard-driven navigation into every
   object the daemon manages, Compose projects grouped with drift detection,
-  and disk pruning with an accurate preview of what would be destroyed.
+  swarm stacks, services and nodes managed from a manager, and disk pruning
+  with an accurate preview of what would be destroyed.
 vendor: Robin HILAIRE
 homepage: https://github.com/RobinHil/hublot
 license: MIT

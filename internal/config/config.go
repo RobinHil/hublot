@@ -39,6 +39,21 @@ type Config struct {
 	// Editor is the command a compose file is handed to, as it would be typed:
 	// "nvim", "code --wait". Empty means ask once and remember the answer.
 	Editor string `yaml:"editor"`
+	// Stacks remembers the files each swarm stack was deployed from, by stack
+	// name. `docker stack deploy` records this nowhere, so without it a stack
+	// could not be deployed again from hublot without asking every time.
+	Stacks map[string][]string `yaml:"stacks,omitempty"`
+	// Tabs says which of the optional tabs are shown. Nil means nobody has
+	// chosen yet, which is what makes hublot ask on its first run.
+	Tabs *Tabs `yaml:"tabs,omitempty"`
+}
+
+// Tabs are the views that can be turned off. Containers, images, volumes,
+// networks and disk are always there: they are what Docker is, whereas a host
+// may never run a compose stack or be part of a swarm.
+type Tabs struct {
+	Compose bool `yaml:"compose"`
+	Swarm   bool `yaml:"swarm"`
 }
 
 // Default is the configuration used when no file exists.

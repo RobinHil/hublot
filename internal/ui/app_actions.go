@@ -576,7 +576,7 @@ func (a *App) applyPruneResult(m cmds.PruneDoneMsg) tea.Cmd {
 	if m.Err != nil {
 		a.openModal(components.NewModal(components.SevError, "prune failed",
 			[]string{m.Err.Error()}, nil))
-		return cmds.RefreshAll(a.ctx, a.client)
+		return a.refreshAll()
 	}
 
 	var total int64
@@ -593,7 +593,7 @@ func (a *App) applyPruneResult(m cmds.PruneDoneMsg) tea.Cmd {
 	// The disk figures are stale the moment a prune runs, so df is recomputed
 	// rather than left showing what used to be there.
 	a.diskView().SetLoading(true)
-	return tea.Batch(cmds.RefreshAll(a.ctx, a.client), cmds.DiskUsage(a.ctx, a.client))
+	return tea.Batch(a.refreshAll(), cmds.DiskUsage(a.ctx, a.client))
 }
 
 // showInspect puts raw inspect output in a scrollable modal, except for the

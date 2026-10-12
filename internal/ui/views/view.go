@@ -15,6 +15,7 @@ import (
 	"github.com/RobinHil/hublot/internal/compose"
 	"github.com/RobinHil/hublot/internal/docker"
 	"github.com/RobinHil/hublot/internal/state"
+	"github.com/RobinHil/hublot/internal/swarm"
 	"github.com/RobinHil/hublot/internal/ui/cmds"
 	"github.com/RobinHil/hublot/internal/ui/components"
 	"github.com/RobinHil/hublot/internal/ui/keys"
@@ -33,6 +34,9 @@ type Deps struct {
 	StopTimeout time.Duration
 	// Shell is the command an exec session runs, empty for the default.
 	Shell []string
+	// SwarmCLI deploys stacks and creates services, the part of swarm the
+	// Engine API cannot do with the user's registry credentials.
+	SwarmCLI swarm.CLI
 }
 
 // View is one tab.
@@ -67,6 +71,8 @@ type ConfirmRequest struct {
 	Body     []string
 	// Run is what happens on confirmation.
 	Run func() tea.Cmd
+	// Word replaces "delete" as what a typed confirmation asks for.
+	Word string
 }
 
 // PickerRequest asks the app to open a searchable palette.
@@ -111,6 +117,8 @@ type PromptRequest struct {
 	Label   string
 	Initial string
 	Run     func(string) tea.Cmd
+	// Secret hides what is typed.
+	Secret bool
 }
 
 // DetailRequest asks the app to show something in the side panel, loading it
@@ -149,6 +157,42 @@ type ComposeRunRequest struct {
 	// Preflight runs `compose config --quiet` first, which every mutating
 	// action needs (AGENTS.md section 8.3).
 	Preflight bool
+}
+
+// SwarmRunRequest asks the app to run a docker CLI command as a task: a stack
+// deploy or removal, a service created or given a new image.
+type SwarmRunRequest struct {
+	Title string
+	Args  []string
+	// Dir is where the command runs; a stack deploy runs next to its file.
+	Dir string
+	// Stack and Files, when set, are remembered once the command is started,
+	// so the stack can be deployed again without asking for its file.
+	Stack string
+	Files []string
+	// Preflight checks the files for variables nothing sets before a
+	// deploy. Accepted means the user has already been told and went on.
+	Preflight bool
+	Accepted  bool
+}
+
+// RememberStackRequest records which files a stack is deployed from, for the
+// next time: the deploy itself records it nowhere.
+type RememberStackRequest struct {
+	Stack string
+	Files []string
+}
+
+// SwarmLogsRequest asks for swarm logs in the panel: a single task, or every
+// task of the services given, merged and labelled by task.
+type SwarmLogsRequest struct {
+	Title    string
+	Source   string
+	Services []docker.Service
+	TaskID   string
+	TaskTTY  bool
+	// Names labels each line by the task it came from, keyed by task id.
+	Names map[string]string
 }
 
 // PruneRequest asks the app to prune after showing a preview.

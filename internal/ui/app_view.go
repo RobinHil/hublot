@@ -28,7 +28,7 @@ func (a *App) View() string {
 
 	if a.helpOpen {
 		overlay, maxOffset := components.HelpOverlay(
-			a.keys, a.store.ReadOnly, a.width, a.height, a.helpOffset)
+			a.keys, a.store.ReadOnly, a.hiddenFeatures(), a.width, a.height, a.helpOffset)
 		a.helpMax = maxOffset
 		return components.Overlay(body, overlay, a.width, a.height)
 	}
@@ -165,6 +165,13 @@ func (a *App) dashboard(l Layout) components.Dashboard {
 	}
 	if a.panel.IsOpen() && !l.Compact {
 		d.Panel = a.panelShare.Label()
+	}
+	// A tab turned off takes its part of the header with it.
+	if a.tabs.Swarm {
+		d.Swarm, d.SwarmAlarm = a.swarmBadge()
+	}
+	if !a.tabs.Compose {
+		d.Projects, d.Drifted = 0, 0
 	}
 	return d
 }

@@ -13,7 +13,7 @@
 pkgname=hublot
 pkgver=0.2.0
 pkgrel=1
-pkgdesc="Terminal UI for a local Docker daemon, with compose awareness and prune previews"
+pkgdesc="Terminal UI for a local Docker daemon, with compose and swarm awareness and prune previews"
 arch=('x86_64' 'aarch64')
 url="https://github.com/RobinHil/hublot"
 license=('MIT')

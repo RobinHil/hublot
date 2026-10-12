@@ -558,3 +558,20 @@ func TestCursorKeepsContextAhead(t *testing.T) {
 		t.Errorf("only %d rows of context past the cursor", gap)
 	}
 }
+
+// A dot coloured in its own text ends with a reset, which ended the band of
+// the row under the cursor with it: on the containers view the band stopped
+// at the first character. The band is reopened after every reset, and the dot
+// keeps its colour.
+func TestCarryBandSurvivesInlineColour(t *testing.T) {
+	open := "\x1b[38;2;242;247;253;48;2;29;58;95m"
+	line := "\x1b[32m●\x1b[0m web-1   nginx\x1b[m"
+	got := carryBand(line, open)
+	want := "\x1b[32m●\x1b[0m" + open + " web-1   nginx\x1b[m" + open
+	if got != want {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+	if carryBand("plain row", open) != "plain row" {
+		t.Fatal("a row with no colour of its own was changed")
+	}
+}

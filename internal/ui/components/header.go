@@ -28,6 +28,11 @@ type Dashboard struct {
 	Running, Paused, Stopped int
 	Projects, Drifted        int
 
+	// Swarm is this node's place in a swarm, empty outside one. SwarmAlarm
+	// marks the states that stop it being managed: locked, in error.
+	Swarm      string
+	SwarmAlarm bool
+
 	Stale      bool
 	ReadOnly   bool
 	Marked     int
@@ -187,6 +192,13 @@ func badges(d Dashboard) string {
 	}
 	if d.Stale {
 		out = append(out, s.Danger.Render("daemon unreachable"))
+	}
+	if d.Swarm != "" {
+		if d.SwarmAlarm {
+			out = append(out, s.Danger.Render(d.Swarm))
+		} else {
+			out = append(out, s.Dim.Render(d.Swarm))
+		}
 	}
 	if d.Marked > 0 {
 		out = append(out, s.Accent.Render(fmt.Sprintf("%d selected", d.Marked)))

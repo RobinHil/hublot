@@ -20,7 +20,10 @@ const helpCell = 26
 //
 // The second return value is how far the overlay can be scrolled, which the
 // app clamps its offset to.
-func HelpOverlay(k keys.Map, readOnly bool, width, height, offset int) (string, int) {
+//
+// hidden names the optional tabs turned off, whose sections are left out: a
+// help listing keys for a tab that is not there documents nothing.
+func HelpOverlay(k keys.Map, readOnly bool, hidden map[string]bool, width, height, offset int) (string, int) {
 	s := theme.Current()
 
 	disabled := map[string]bool{}
@@ -43,7 +46,7 @@ func HelpOverlay(k keys.Map, readOnly bool, width, height, offset int) (string, 
 		perLine = 1
 	}
 
-	lines := helpLines(k, disabled, perLine, inner)
+	lines := helpLines(k, disabled, hidden, perLine, inner)
 
 	// Two lines for the title, two for the border, one for the footer.
 	visible := height - 6
@@ -87,12 +90,15 @@ func HelpOverlay(k keys.Map, readOnly bool, width, height, offset int) (string, 
 
 // helpLines lays every section out into fixed-width columns, with its notes
 // across the whole width above them.
-func helpLines(k keys.Map, disabled map[string]bool, perLine, inner int) []string {
+func helpLines(k keys.Map, disabled, hidden map[string]bool, perLine, inner int) []string {
 	s := theme.Current()
 
 	var lines []string
-	for i, section := range k.Sections() {
-		if i > 0 {
+	for _, section := range k.Sections() {
+		if hidden[section.Feature] {
+			continue
+		}
+		if len(lines) > 0 {
 			lines = append(lines, "")
 		}
 		lines = append(lines, s.Accent.Render(section.Title))

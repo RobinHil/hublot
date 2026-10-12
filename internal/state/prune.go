@@ -74,8 +74,30 @@ type Item struct {
 	// (AGENTS.md section 10.3).
 	Project string
 	Service string
+	// Stack is the swarm stack owning the object, styled like a Compose
+	// project: `docker stack deploy` made it, and removing it from under a
+	// stack is the same surprise.
+	Stack string
 	// Detail is a short human explanation, such as "exited 3 days ago".
 	Detail string
+}
+
+// Owned reports whether the object belongs to a Compose project or a stack.
+func (it Item) Owned() bool { return it.Project != "" || it.Stack != "" }
+
+// Owner names what the object belongs to, for display.
+func (it Item) Owner() string {
+	switch {
+	case it.Project != "" && it.Service != "":
+		return "compose: " + it.Project + "/" + it.Service
+	case it.Project != "":
+		return "compose: " + it.Project
+	case it.Stack != "" && it.Service != "":
+		return "stack: " + it.Stack + "/" + it.Service
+	case it.Stack != "":
+		return "stack: " + it.Stack
+	}
+	return ""
 }
 
 // Preview is what a prune would do, reconstructed object by object. The Engine
@@ -90,9 +112,14 @@ type Preview struct {
 	// in Unknown instead.
 	Reclaimable int64
 	Unknown     int
-	// ComposeOwned is how many items belong to a Compose project.
+	// ComposeOwned is how many items belong to a Compose project, and
+	// StackOwned how many to a swarm stack.
 	ComposeOwned int
+	StackOwned   int
 }
+
+// Owned is how many items belong to a Compose project or a swarm stack.
+func (p Preview) Owned() int { return p.ComposeOwned + p.StackOwned }
 
 // Empty reports whether the prune would do nothing.
 func (p Preview) Empty() bool { return len(p.Items) == 0 }
@@ -108,6 +135,9 @@ func (p Preview) Summary() string {
 	}
 	if p.ComposeOwned > 0 {
 		s += fmt.Sprintf(", %d belonging to compose projects", p.ComposeOwned)
+	}
+	if p.StackOwned > 0 {
+		s += fmt.Sprintf(", %d belonging to swarm stacks", p.StackOwned)
 	}
 	return s
 }
@@ -125,6 +155,13 @@ type Snapshot struct {
 	// Until, when set, restricts the prune to objects created before Now-Until,
 	// the way `--filter until=24h` does.
 	Until time.Duration
+	// Services are the swarm's services, as a manager lists them. A swarm
+	// network a service uses is refused by the daemon, and an image a service
+	// runs elsewhere is pulled back the next time a task lands here.
+	Services []docker.Service
+	// SwarmManager is set on a manager, the only kind of node whose network
+	// prune touches swarm networks at all.
+	SwarmManager bool
 	// VolumePruneAllSupported reflects the negotiated API version. Below 1.42
 	// the daemon has no `all` filter and prunes every unused volume, named ones
 	// included (AGENTS.md section 10.2).
@@ -199,8 +236,11 @@ func GlobalPreview(snap Snapshot, includeVolumes, allImages bool) []Preview {
 // finalize sorts Compose-owned objects first and totals the sizes.
 func finalize(p *Preview) {
 	for _, it := range p.Items {
-		if it.Project != "" {
+		switch {
+		case it.Project != "":
 			p.ComposeOwned++
+		case it.Stack != "":
+			p.StackOwned++
 		}
 		if it.Size < 0 {
 			p.Unknown++
@@ -211,11 +251,11 @@ func finalize(p *Preview) {
 
 	sort.SliceStable(p.Items, func(i, j int) bool {
 		a, b := p.Items[i], p.Items[j]
-		if (a.Project != "") != (b.Project != "") {
-			return a.Project != ""
+		if a.Owned() != b.Owned() {
+			return a.Owned()
 		}
-		if a.Project != b.Project {
-			return a.Project < b.Project
+		if a.Owner() != b.Owner() {
+			return a.Owner() < b.Owner()
 		}
 		return a.Name < b.Name
 	})
@@ -232,14 +272,22 @@ func prunableContainers(snap Snapshot) []Item {
 		if !snap.olderThanUntil(c.Created) {
 			continue
 		}
-		out = append(out, Item{
+		it := Item{
 			ID:      c.ID,
 			Name:    c.Name,
 			Size:    c.SizeRW,
 			Project: compose.ProjectOf(c.Labels),
 			Service: compose.ServiceOf(c.Labels),
+			Stack:   c.Labels[docker.LabelStackNamespace],
 			Detail:  c.Status,
-		})
+		}
+		if svc := c.Labels[docker.LabelSwarmService]; svc != "" && it.Project == "" {
+			// A finished task: the swarm keeps it as history and does not
+			// need it to run the service.
+			it.Service = svc
+			it.Detail = "swarm task, " + c.Status
+		}
+		out = append(out, it)
 	}
 	return out
 }
@@ -266,15 +314,46 @@ func prunableImages(snap Snapshot, all bool) []Item {
 		if usedByTag(used, img.RepoTags) {
 			continue
 		}
-		out = append(out, Item{
-			ID:      img.ID,
-			Name:    img.Ref(),
-			Size:    img.Size,
-			Project: "",
-			Detail:  age(snap.now(), img.Created),
-		})
+		it := Item{
+			ID:     img.ID,
+			Name:   img.Ref(),
+			Size:   img.Size,
+			Detail: age(snap.now(), img.Created),
+		}
+		// The daemon prunes an image no local container uses, whatever the
+		// swarm thinks of it. Said, because the next task of that service
+		// placed here pulls it again.
+		if svc, ok := serviceUsing(snap.Services, img); ok {
+			it.Stack = svc.Stack()
+			it.Service = svc.Name
+			it.Detail += ", run by swarm service " + svc.Name + " elsewhere"
+		}
+		out = append(out, it)
 	}
 	return out
+}
+
+// serviceUsing finds a service running an image, by tag or by digest. A
+// service pins its tag to a digest, "nginx:1.27@sha256:...", so either half
+// can be what the host knows the image by.
+func serviceUsing(svcs []docker.Service, img docker.Image) (docker.Service, bool) {
+	for _, svc := range svcs {
+		ref, digest, _ := strings.Cut(svc.Image, "@")
+		for _, tag := range img.RepoTags {
+			if tag == ref || tag == ref+":latest" {
+				return svc, true
+			}
+		}
+		if digest == "" {
+			continue
+		}
+		for _, d := range img.RepoDigests {
+			if strings.HasSuffix(d, "@"+digest) {
+				return svc, true
+			}
+		}
+	}
+	return docker.Service{}, false
 }
 
 // usedImages indexes every image reference held by a container, by ID and by
@@ -314,7 +393,9 @@ func prunableVolumes(snap Snapshot, all bool) []Item {
 
 	var out []Item
 	for _, v := range snap.Volumes {
-		if used[v.Name] {
+		// A cluster volume belongs to the swarm, not to this daemon's volume
+		// store, and the local prune never reaches it.
+		if used[v.Name] || v.Cluster {
 			continue
 		}
 		if v.RefCount > 0 {
@@ -333,6 +414,7 @@ func prunableVolumes(snap Snapshot, all bool) []Item {
 			Size:    v.Size,
 			Project: v.Labels[compose.LabelProject],
 			Service: v.Labels[compose.LabelService],
+			Stack:   v.Labels[docker.LabelStackNamespace],
 			Detail:  detail,
 		})
 	}
@@ -354,6 +436,12 @@ func usedVolumes(cs []docker.Container) map[string]bool {
 
 // prunableNetworks replicates `docker network prune`: user-defined networks
 // with nothing attached. The three predefined networks are never candidates.
+//
+// Swarm networks follow the daemon's own rules for them: only a manager
+// prunes them at all, the ingress network never, and a network a service is
+// attached to is refused whatever runs on this node. The containers attached
+// locally say nothing about that, since a service's tasks can all be on other
+// nodes.
 func prunableNetworks(snap Snapshot) []Item {
 	attached := map[string]bool{}
 	for _, c := range snap.Containers {
@@ -364,7 +452,10 @@ func prunableNetworks(snap Snapshot) []Item {
 
 	var out []Item
 	for _, n := range snap.Networks {
-		if n.Predefined() {
+		if n.Predefined() || n.Ingress {
+			continue
+		}
+		if n.Scope == "swarm" && (!snap.SwarmManager || networkInService(snap.Services, n)) {
 			continue
 		}
 		if len(n.Containers) > 0 || attached[n.Name] {
@@ -378,10 +469,24 @@ func prunableNetworks(snap Snapshot) []Item {
 			Name:    n.Name,
 			Size:    0,
 			Project: n.Labels[compose.LabelProject],
+			Stack:   n.Labels[docker.LabelStackNamespace],
 			Detail:  n.Driver,
 		})
 	}
 	return out
+}
+
+// networkInService reports whether a service is attached to a network, which
+// a spec records by id or by name.
+func networkInService(svcs []docker.Service, n docker.Network) bool {
+	for _, svc := range svcs {
+		for _, target := range svc.Networks {
+			if target == n.ID || target == n.Name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // prunableBuildCache replicates `docker builder prune`: records not in use, or

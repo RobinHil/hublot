@@ -180,3 +180,17 @@ func (e Event) StopsContainer() bool {
 	}
 	return false
 }
+
+// AffectsSwarm reports whether a swarm object changed. Managers emit these for
+// services, nodes, secrets and configs; tasks emit nothing and are polled.
+func (e Event) AffectsSwarm() bool {
+	switch e.Type {
+	case "service", "node", "secret", "config":
+		return true
+	}
+	return false
+}
+
+// AffectsNodes reports whether a node changed, which can change this daemon's
+// own place in the swarm: a promotion, a demotion, a removal.
+func (e Event) AffectsNodes() bool { return e.Type == "node" }

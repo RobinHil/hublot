@@ -33,10 +33,17 @@ Print the version and exit.
 .SH KEYS
 Lowercase is safe, uppercase is destructive or forced.
 .TP
-.B 1..6, tab, shift+tab, left, right
-Switch view. The tabs run containers, compose, images, volumes, networks,
-disk: stacks are how hosts are run, so they come before the loose objects
-underneath them.
+.B 1..7, tab, shift+tab, left, right
+Switch view. The arrows also step through the sections of the swarm tab on
+the way. The tabs run containers, compose, swarm, images, volumes,
+networks, disk: stacks are how hosts are run, so they come before the loose
+objects underneath them. The digits follow the tabs shown.
+.TP
+.B ,
+Choose the tabs. Compose and swarm can each be turned off, which removes the
+tab entirely; the others are always there. The question is asked on the first
+run, starting from what the machine has: compose when its plugin is installed,
+swarm when the daemon is in one.
 .TP
 .B /
 Incremental filter. Every space-separated term must match.
@@ -98,6 +105,89 @@ shows the configuration compose resolves from it.
 reads the whole stack's logs from anywhere, and
 .B n
 brings up a stack from a compose file nothing has been created from yet.
+.SH SWARM
+The swarm tab shows a swarm the way its managers see it, in five sections
+on a line of their own:
+.BR services ,
+.BR nodes ,
+.BR secrets ,
+.B configs
+and
+.BR cluster .
+The left and right arrows walk through them like tabs: right from the compose
+tab lands on services, right from cluster goes on to the next tab, and left
+retraces the same path.
+.B tab
+and
+.B shift+tab
+skip the sections and only change tab.
+.PP
+Services are grouped by the stack that deployed them, with the ones deployed
+alone at the end.
+.B enter
+folds what the line heads: a stack, or the tasks of a service, which unfold
+underneath so the cursor stays where it was. On a task it opens the detail.
+A service short of tasks says why on its own line, in the scheduler's words.
+.PP
+On a stack line,
+.B u
+deploys it from its file,
+.B E
+edits that file then offers to deploy it,
+.B v
+reads it,
+.B c
+shows it resolved,
+.B D
+removes the stack, and
+.B L
+merges the logs of all its services. On a service line,
+.B l
+reads its logs across every node,
+.B +
+and
+.B -
+scale it,
+.B R
+replaces every task,
+.B B
+rolls it back, and
+.B E
+opens its whole spec in your editor and sends back what you wrote. On a task,
+.B e
+opens a shell when it runs on this machine.
+.B x
+carries the rest: a new image, constraints, published ports, networks,
+secrets, configs, variables and labels.
+.PP
+Nodes are drained with
+.B S
+and paused with
+.BR P ,
+the hint naming the half of the toggle the row needs. Promoting and demoting
+are in the palette, behind a dialog that does the quorum arithmetic first.
+Secrets and configs cannot change in place: a new value creates a new version,
+moves every service using the old one onto it at the same path, and removes
+the old one, or puts everything back if a service refuses.
+.PP
+.B docker stack deploy
+records nowhere which file a stack came from, so
+.B hublot
+remembers the files of the stacks it deployed, and asks for the others. It
+also reads no
+.I .env
+file, only the environment it runs in: before a deploy, the variables a stack
+file uses and nothing sets are listed, and deploying them blank needs
+confirming.
+.PP
+Off a manager the tab says where this node stands:
+.B I
+creates a swarm and
+.B J
+joins one when it is in none,
+.B u
+unlocks a manager restarted with autolock on, and a worker shows its managers
+and the tasks running on it.
 .SH EDITING
 .B E
 opens a project's compose file in your editor, and offers to apply what you
@@ -215,11 +305,13 @@ opens.
 .I ~/.config/hublot/config.yaml
 Optional configuration. Every setting has a working default, so the file may be
 absent. Recognised keys: theme, stop_timeout, max_stat_streams, log_tail, shell,
-read_only, default_sort, sort_descending, confirm_destructive, editor.
+read_only, default_sort, sort_descending, confirm_destructive, editor, stacks,
+tabs.
 .IP
 .B hublot
 writes this file itself when it learns something worth keeping, such as the
-editor you picked the first time you edited a compose file.
+editor you picked the first time you edited a compose file, or the files a
+swarm stack was deployed from, and which tabs you chose.
 .TP
 .I /var/run/docker.sock
 The daemon socket of a root installation. If DOCKER_HOST names a unix socket,

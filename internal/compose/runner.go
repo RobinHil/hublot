@@ -26,17 +26,20 @@ type Result struct {
 // channel closes when the command ends; the result channel then carries exactly
 // one value.
 func (c CLI) Run(ctx context.Context, p Project, action ...string) (<-chan OutputLine, <-chan Result) {
-	lines := make(chan OutputLine, 128)
-	result := make(chan Result, 1)
-
 	if !c.Available {
-		close(lines)
-		result <- Result{ExitCode: -1, Err: errors.New(c.Reason)}
-		close(result)
-		return lines, result
+		return Refused(errors.New(c.Reason))
 	}
 
-	cmd := c.Command(ctx, p, action...)
+	return Stream(ctx, c.Command(ctx, p, action...), action[0], c.DisplayCommand(p, action...))
+}
+
+// Stream runs a prepared command, streaming its output line by line. The
+// output channel closes when the command ends; the result channel then
+// carries exactly one value. verb names the failure, display the command as
+// a user would type it. The swarm CLI runs through here too.
+func Stream(ctx context.Context, cmd *exec.Cmd, verb, display string) (<-chan OutputLine, <-chan Result) {
+	lines := make(chan OutputLine, 128)
+	result := make(chan Result, 1)
 
 	go func() {
 		defer close(lines)
@@ -54,7 +57,7 @@ func (c CLI) Run(ctx context.Context, p Project, action ...string) (<-chan Outpu
 		}
 
 		if err := cmd.Start(); err != nil {
-			result <- Result{ExitCode: -1, Err: fmt.Errorf("running %s: %w", c.DisplayCommand(p, action...), err)}
+			result <- Result{ExitCode: -1, Err: fmt.Errorf("running %s: %w", display, err)}
 			return
 		}
 
@@ -71,16 +74,26 @@ func (c CLI) Run(ctx context.Context, p Project, action ...string) (<-chan Outpu
 		case err == nil:
 		case errors.As(err, &exitErr):
 			res.ExitCode = exitErr.ExitCode()
-			// Compose already printed the reason on stderr; the task panel
+			// The command already printed the reason on stderr; the task panel
 			// shows it, so the error here only needs to say what failed.
-			res.Err = fmt.Errorf("%s exited with code %d", action[0], res.ExitCode)
+			res.Err = fmt.Errorf("%s exited with code %d", verb, res.ExitCode)
 		default:
 			res.ExitCode = -1
-			res.Err = fmt.Errorf("running %s: %w", c.DisplayCommand(p, action...), err)
+			res.Err = fmt.Errorf("running %s: %w", display, err)
 		}
 		result <- res
 	}()
 
+	return lines, result
+}
+
+// Refused is a run that never started, reported the way a finished one is.
+func Refused(err error) (<-chan OutputLine, <-chan Result) {
+	lines := make(chan OutputLine)
+	result := make(chan Result, 1)
+	close(lines)
+	result <- Result{ExitCode: -1, Err: err}
+	close(result)
 	return lines, result
 }
 

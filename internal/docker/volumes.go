@@ -50,7 +50,33 @@ func toVolume(v volume.Volume) Volume {
 		out.Size = v.UsageData.Size
 		out.RefCount = v.UsageData.RefCount
 	}
+	if cv := v.ClusterVolume; cv != nil {
+		out.Cluster = true
+		out.ClusterID = cv.ID
+		out.Availability = string(cv.Spec.Availability)
+		out.Group = cv.Spec.Group
+	}
 	return out
+}
+
+// SetVolumeAvailability takes a cluster volume offline or back: pause keeps
+// new tasks from using it, drain also stops the ones that do. Only a CSI
+// volume managed by a swarm has an availability.
+func (c *Client) SetVolumeAvailability(ctx context.Context, name, availability string) error {
+	v, err := c.api.VolumeInspect(ctx, name)
+	if err != nil {
+		return fmt.Errorf("inspecting volume %s: %w", name, err)
+	}
+	if v.ClusterVolume == nil {
+		return fmt.Errorf("%s is not a cluster volume: only those have an availability", name)
+	}
+	spec := v.ClusterVolume.Spec
+	spec.Availability = volume.Availability(availability)
+	opts := volume.UpdateOptions{Spec: &spec}
+	if err := c.api.VolumeUpdate(ctx, v.ClusterVolume.ID, v.ClusterVolume.Version, opts); err != nil {
+		return fmt.Errorf("updating volume %s: %w", name, err)
+	}
+	return nil
 }
 
 // isAnonymousVolume reports whether the name looks like one the daemon

@@ -25,8 +25,8 @@ Two things justify this tool existing next to `lazydocker`, `ctop` and `dry`:
 
 ## 2. Scope
 
-In scope: containers, images, volumes, networks, Compose projects, system disk
-usage, live CPU/memory/network/block IO stats, every action the Engine API
+In scope: containers, images, volumes, networks, Compose projects, swarms
+(section 8b), system disk usage, live CPU/memory/network/block IO stats, every action the Engine API
 exposes for those objects, log streaming, shell exec, inspect, granular and global
 pruning with previews, multi-selection and filtering.
 
@@ -86,7 +86,14 @@ Compose: up, down, stop, restart, pull, build, scale, config, drift, logs,
 reading the compose file, and starting a stack from a file on disk. Reading it
 is its own key: answering "what does this stack actually say" by opening an
 editor is how a file gets changed by accident. System: info, version, events, df, prune
-per category.
+per category. Swarm: init, join, leave, unlock, the cluster settings, join
+tokens, unlock key and CA rotation; stacks deployed, read, edited, resolved,
+removed; services created, scaled, re-imaged, restarted, rolled back, edited
+whole as a spec, and changed piecemeal from the palette; tasks listed with
+their errors, logs read across nodes, a shell opened when they run here; nodes
+drained, paused, promoted, demoted, labelled, removed; secrets and configs
+created, read where readable, rotated, removed; overlay networks and CSI
+cluster volumes.
 
 Out of scope, deliberately:
 
@@ -101,8 +108,11 @@ Out of scope, deliberately:
   installation never creates. Do not add context files or a host flag on top.
 - Kubernetes.
 - Any web UI, HTTP server, or telemetry.
-- Swarm, services, nodes, tasks, secrets, configs and plugins; image build and
-  push, registry login and search; checkpoints. `attach` is not offered either:
+- Plugins, and with them installing a CSI driver; image build and push,
+  registry login and search; checkpoints. A swarm is managed through the
+  daemon of this machine and nothing else: a task on another node has its logs
+  read through the managers, never a shell, because that would mean talking to
+  another daemon. `attach` is not offered either:
   `exec` covers what it is used for without the risk of sending a signal to
   PID 1, and `wait` has no meaning in a view that already shows state.
 
@@ -223,11 +233,19 @@ hublot/
       stats.go                per-container stats stream, CPU/mem computation
       logs.go                 log stream with stdcopy demultiplexing
       exec.go                 interactive exec session, on its own screen
+      swarm.go                swarm state, init, join, leave, unlock, cluster settings
+      services.go             services: list with counts, inspect, rollback, update
+      servicespec.go          one change to a spec, and a spec as YAML both ways
+      tasks.go nodes.go       tasks; nodes and their availability, role, labels
+      secrets.go              secrets and configs
     compose/
       labels.go               rebuild project tree from container labels
       cli.go                  binary detection, argument construction
       runner.go               command execution with streamed output
       drift.go                config-hash comparison
+    swarm/
+      stacks.go               rebuild stacks from the namespace label
+      cli.go create.go        the docker CLI: stack deploy, rm, config, service create
     editor/editor.go          finding an editor, and how to wait for it
     state/
       store.go                the model's data, reducers, sorting, filtering
@@ -235,10 +253,12 @@ hublot/
       edit.go                 what an edit form came back with, against what is there
       parse.go                parsing what people type: sizes, paths, mounts
       diagnose.go             explaining the failures that keep happening
+      swarm.go                slots, quorum, who uses what, version names
     ui/
       app.go                  root model, message routing, global keys
       app_actions.go          what each request does
       app_view.go             the frame, the dashboard, the hints
+      app_swarm.go            swarm lists, task polling, CLI runs, logs, spec edits
       layout.go               how the screen is divided, and nowhere else
       stream.go               waitFor and friends
       cmds/                   every Docker call, as tea.Cmd
@@ -256,6 +276,9 @@ hublot/
         containers.go compose.go images.go volumes.go networks.go disk.go
         run.go                the container creation form
         edit.go               the container edit form, and what a rebuild costs
+        swarm.go              the Swarm tab: sections, segment line, routing
+        swarm_services.go swarm_stacks.go swarm_palette.go
+        swarm_nodes.go swarm_objects.go swarm_cluster.go swarm_off.go
         view.go               the View interface and the requests it sends
     config/config.go          ~/.config/hublot/config.yaml
 ```
@@ -374,6 +397,8 @@ gone. Check the actual signatures before writing a call.
 | Object lists | Resync on relevant event, plus a 10s safety poll |
 | Disk usage | On demand only |
 | Compose drift | On demand, or on entering the Compose view |
+| Swarm lists | On a manager: on swarm events, with the info and the 10s poll |
+| Swarm tasks and services | Every 2s while the Swarm view is on screen; tasks emit no events |
 
 ## 8. The Compose layer
 
@@ -479,6 +504,49 @@ project, prefix each line with the service name, colorize by a stable hash of th
 service name, merge into one channel. This keeps buffering and search consistent
 with the normal log view.
 
+## 8b. The Swarm layer
+
+Swarm is in the Engine API, unlike Compose, but only on a manager: a worker is
+refused every list, and an inactive node has none. `docker info` is the one
+thing every node answers, so `Info.Swarm` decides what the Swarm view shows,
+and the app follows it: a manager gets its lists, anything else has them
+cleared, because the services of a swarm this node has left are not this
+node's any more. `refreshAll` reads the info with the lists for that reason.
+
+Stacks are a CLI invention like Compose projects: `docker stack deploy` puts
+`com.docker.stack.namespace` on the services, networks, secrets and configs it
+creates, and `internal/swarm/stacks.go` groups by it, purely, the way
+`compose/labels.go` does. A stack whose services are gone is still listed
+through what it left.
+
+Three things go through the `docker` CLI rather than the API, in an argument
+slice, never a shell string: deploying and removing a stack, creating a
+service, and giving one a new image. The last two because only the CLI knows
+the registry credentials, credential helpers included, and only it resolves a
+tag to a digest so every node runs the same build. Every other service update
+goes through the API with `RegistryAuthFrom: spec`, which keeps the
+credentials already in the spec.
+
+`docker stack deploy` reads no `.env` and records nowhere which file a stack
+came from. hublot remembers the files of the stacks it deploys, in `stacks` in
+the configuration, and asks for the others. The `.env` trap is worse than
+Compose's: `docker stack config` substitutes a variable nobody set with a blank
+and says nothing, so the preflight reads the files for the variables they use
+and lists the ones the environment lacks, and deploying them blank needs a
+confirmation. `${VAR:-default}` and `${VAR:?message}` are not reported.
+
+Secrets and configs cannot change in place. A new value is a new object named
+`name.vN`, every service using the old one is moved onto it at the same path
+with the same owner and mode, and the old one is removed; a service that
+refuses puts the ones already moved back and the new object is removed again.
+A service's spec is edited whole as YAML converted from the API's JSON, numbers
+kept exact, sent back against the version it was read at, and refused when a
+key is unknown: a misspelt key would otherwise vanish with the edit.
+
+The tasks of a slot are kept as history by the swarm. A slot shows its newest
+task and counts the failed ones before it; `ServiceProblem` quotes the
+scheduler's reason when a service is short, on the service's own line.
+
 ## 9. The UI
 
 ### 9.1 Layout
@@ -578,7 +646,11 @@ match found by line number lands further off the more the buffer wraps.
 heading the cursor can land on. The Compose view uses it for the project line.
 Selected, it is stripped before it is painted, for the same reason a selected
 row drops its per-cell colours: a colour left inside resets the background and
-the band stops at the first one.
+the band stops at the first one. A cell can still carry colour in its own text,
+the state dot in front of a container's name being the case, and `band`
+reopens the band after every reset inside the row: the background holds to
+the end and the dot keeps its colour on it. That colour has to read on the
+band too, which is why a stopped container's dot is muted rather than faint.
 
 The table budgets lines rather than counting rows: a group heading takes a line
 like a row does, so `rowsFitting` decides the window and `View` renders exactly
@@ -592,14 +664,28 @@ Convention, applied consistently: **lowercase is safe, uppercase is destructive 
 forced.** All bindings live in `internal/ui/keys`, never inline in views, so the
 help overlay is generated from the same source.
 
-The tabs run Containers, Compose, Images, Volumes, Networks, Disk: stacks are
-how hosts are run, so they come before the loose objects underneath them. The
-digit keys follow that order and nothing else depends on it.
+The tabs run Containers, Compose, Swarm, Images, Volumes, Networks, Disk:
+stacks are how hosts are run, so they come before the loose objects underneath
+them. Compose and Swarm are optional, and only those two: a host may never run
+a stack, while containers, images, volumes, networks and disk are what Docker
+is. The choice is asked on the first run, from defaults this machine suggests
+(Compose when its plugin is installed, Swarm when the daemon is in one),
+written to `tabs` in the configuration, and reopened with `,`; dismissing the
+question keeps the defaults for the session and asks again next time. A tab
+turned off is gone entirely: from the bar, the digits, the help and the
+header. The digit keys follow the tabs shown, so they move with the choice,
+and the view on screen stays on screen when another is turned off.
 
-Global: `1`-`6` / `tab` / `shift+tab` / left and right arrows switch view (no
-table scrolls sideways, so the horizontal arrows are free), `/` filter, `s` cycle sort,
+Turning Swarm off hides it and nothing more. On a manager the swarm lists are
+still read, because the prune preview needs to know which networks a service
+holds (section 10.2), and a display setting must not make that preview wrong.
+
+Global: `1`-`7` / `tab` / `shift+tab` / left and right arrows switch view (no
+table scrolls sideways, so the horizontal arrows are free; a view with sections
+lets them through its sections first, see Swarm below), `/` filter, `s` cycle sort,
 `space` mark, `a` mark all (respects filter), `esc` clear filter / selection /
-close modal, `?` help, `r` force refresh, `q` and `ctrl+c` quit.
+close modal, `?` help, `r` force refresh, `,` choose the tabs, `q` and
+`ctrl+c` quit.
 
 Containers: `enter` detail pane, `l` logs, `e` exec shell, `S` stop, `R` restart,
 `P` pause/unpause, `K` kill with signal picker, `D` remove, `E` edit, `x`
@@ -615,6 +701,22 @@ scale selected service, `v` read the compose file, `E` edit it, `c` show
 resolved config, `d` check drift, `n` a new or existing stack, `enter` fold,
 `D` down, `X` down -v --remove-orphans. On a stack whose file is gone, `S`, `R`,
 `D` and `X` mean the same thing through the engine API instead.
+
+Swarm: services, nodes, secrets, configs and cluster are sections drawn on a
+segment line without digits, since digits switch views, and the arrows walk
+them as if they were tabs between Compose and Images: right from Compose lands
+on services, right from cluster goes on to Images, left retraces the path, and
+`tab` / `shift+tab` skip the sections. A view takes part by implementing
+`Step` and `EnterFrom`; brackets were tried first and read as one more thing
+to learn for what is plainly moving sideways. `enter`
+folds what the line heads, a stack or the tasks of a service or a node, which
+unfold underneath so the cursor stays put; on a leaf it opens the detail. On a
+stack line `u` deploys, `E` edits the file, `v` reads it, `c` resolves it, `D`
+removes the stack; on a service `l` logs, `+` / `-` scale, `R` replaces every
+task, `B` rolls back, `E` edits the spec, `D` removes; on a task `e` opens a
+shell if it runs here. Nodes: `S` drain, `P` pause, both toggles named by what
+the row needs, `D` remove; promotion and demotion are in the palette behind the
+quorum arithmetic. Off a manager: `I` init, `J` join, `u` unlock.
 
 ### 9.3 Task panel
 
@@ -652,7 +754,13 @@ Rules to replicate faithfully:
   skips named volumes unless `all` is set, and this behavior changed across
   versions. Check the negotiated API version and reflect it.
 - **Networks**: user-defined, not referenced by any container, excluding built-in
-  `bridge`, `host` and `none`
+  `bridge`, `host` and `none`. Swarm networks only on a manager, never
+  `ingress`, and never one a service is attached to: its tasks may all run
+  elsewhere, so the local attachments say nothing
+- **Volumes**, again: a CSI cluster volume belongs to the swarm and the local
+  prune never reaches it
+- **Images**, again: an image a service runs elsewhere is pruned like any
+  other; the preview keeps it and names the service that will pull it back
 - **Build cache**: reported separately by `df`; prune via the dedicated endpoint
 
 **This is the only place in the codebase where a bug destroys user data.** It gets
@@ -666,7 +774,8 @@ Compose stack, which is usually data loss. In every prune preview, split affecte
 objects into two groups: objects belonging to a Compose project, with the project
 name shown per object, and genuinely orphaned objects. Sort the Compose-owned ones
 first and style them as a warning. This is the difference between a tool people
-dare to run and one they never open.
+dare to run and one they never open. Objects of a swarm stack get the same
+treatment, named by their stack.
 
 ### 10.4 Read-only mode
 
@@ -769,7 +878,10 @@ retried can be `down -v`.
   runs in CI and never runs by default. It is how a change to the docker layer
   is checked by hand, with `go test -tags live ./internal/docker/`, and it is
   the only place a test needs a daemon. It also carries the goroutine-leak check
-  the definition of done asks for.
+  the definition of done asks for. `live_swarm_test.go` does the same for the
+  swarm half, and only with `HUBLOT_LIVE_SWARM=1` on a daemon in no swarm: it
+  creates one, works in it and leaves it. The messages it logs with `-v` are
+  where the swarm patterns in `diagnose.go` were captured from.
 - Everything else runs with no daemon at all.
 
 ## 14. Build order
@@ -814,6 +926,8 @@ Do not build views before the data layer is solid.
 - CPU and memory figures match `docker stats` within rounding.
 - Every object type listable, inspectable, removable.
 - Compose projects grouped, actionable, with drift detection.
+- Swarm stacks, services, tasks, nodes, secrets and configs listable and
+  actionable from a manager, and a node outside one able to create or join one.
 - Disk view accurate, prune previews match what actually gets deleted.
 - No goroutine leak after 30 minutes of containers starting and stopping.
 - Quitting always restores the terminal, including after exec and after a panic.

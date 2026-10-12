@@ -21,10 +21,10 @@ Two things set it apart from the tools next to it:
 Linux and macOS. It talks to the local daemon socket only, by design: no
 contexts, no TCP, no SSH.
 
-Everything the Engine API offers for containers, images, volumes and networks is
-there, and things are created as well as managed: a container from a form that
-asks what `docker run` takes, a volume or a network from a prompt, an image
-pulled by name, a compose stack written from scratch in your own editor.
+Everything the Engine API offers for containers, images, volumes, networks and
+swarms is there, and things are created as well as managed: a container from a
+form that asks what `docker run` takes, a volume or a network from a prompt, an
+image pulled by name, a compose stack written from scratch in your own editor.
 
 Reading happens in a panel beside the list rather than instead of it: logs,
 inspect output, process lists, the compose file itself. The divider is dragged
@@ -74,12 +74,16 @@ Lowercase is safe, uppercase is destructive or forced, everywhere. `?` opens
 the help overlay, which is generated from the same definitions the program
 dispatches on, so it cannot fall out of date.
 
-The tabs run containers, compose, images, volumes, networks, disk, on `1` to
-`6` and on the arrow keys. `/` filters, `s` sorts, `space` selects rows for a
-batch action, `l` reads logs, `e` opens a shell, `x` is the palette for
-everything without a key of its own, and `t` shows what long commands are
-printing. In the compose view each project is a line of its own: act on it for
-the whole stack, on a service line for that service.
+The tabs run containers, compose, swarm, images, volumes, networks and disk, on
+the digits and on the arrow keys. Compose and swarm are optional: hublot asks on
+its first run which of them you want, and `,` changes it later. `/` filters, `s`
+sorts, `space` selects rows for a batch action, `l` reads logs, `e` opens a
+shell, `x` is the palette for everything without a key of its own, and `t` shows
+what long commands are printing. In the compose view each project is a line of
+its own: act on it for the whole stack, on a service line for that service. The
+swarm view works the same way with stacks and services, the arrows step through
+its nodes, secrets, configs and cluster settings on the way to the next tab, and
+off a swarm it offers to create or join one.
 
 ## Building and contributing
 

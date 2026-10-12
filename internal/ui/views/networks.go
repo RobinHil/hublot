@@ -79,6 +79,11 @@ func (v *Networks) row(n docker.Network) components.Row {
 	for _, a := range n.Attached() {
 		attached = append(attached, a.Name)
 	}
+	// A swarm network is used by services, whose tasks may all be on other
+	// nodes: the local attachments alone would read as unused.
+	for _, svc := range v.deps.Store.NetworkServices(n) {
+		attached = append(attached, "service "+svc.Name)
+	}
 	list := strings.Join(attached, ", ")
 	if list == "" {
 		list = "-"
@@ -90,10 +95,13 @@ func (v *Networks) row(n docker.Network) components.Row {
 		// before the user tries.
 		name += " (built-in)"
 	}
+	if n.Ingress {
+		name += " (routing mesh)"
+	}
 
 	return components.Row{
 		ID:  n.ID,
-		Dim: len(n.Containers) == 0,
+		Dim: len(attached) == 0,
 		Cells: []components.Cell{
 			components.Txt(name),
 			components.Txt(n.Driver),
@@ -142,20 +150,9 @@ func (v *Networks) palette() tea.Cmd {
 
 	choices := []components.Choice{
 		{
-			Label: "create a network", Detail: "a user-defined bridge, so names resolve",
+			Label: "create a network", Detail: "a bridge, or an overlay across a swarm",
 			Destructive: true,
-			Payload: func() tea.Cmd {
-				return request(PromptRequest{
-					Title: "Create a network",
-					Body: []string{
-						"A bridge network, on which containers find each other by name.",
-					},
-					Label: "name: ",
-					Run: func(newName string) tea.Cmd {
-						return cmds.CreateNetwork(v.deps.Ctx, v.deps.Client, newName)
-					},
-				})
-			},
+			Payload:     func() tea.Cmd { return v.createForm() },
 		},
 		{
 			Label: "inspect", Detail: "raw inspect output, with the attached containers",
@@ -201,6 +198,43 @@ func (v *Networks) palette() tea.Cmd {
 		choices = keepSafe(choices)
 	}
 	return request(PickerRequest{Title: "Actions on " + n.Name, Choices: choices})
+}
+
+// createForm asks for a network. The overlay options only mean something on
+// a swarm, and the form says so rather than hiding them.
+func (v *Networks) createForm() tea.Cmd {
+	drivers := []string{"bridge"}
+	driverHint := "bridge: this machine only"
+	if v.deps.Store.SwarmManaged() {
+		drivers = append(drivers, "overlay")
+		driverHint += "; overlay: across the swarm"
+	}
+	return request(FormRequest{
+		Title:    "Create a network",
+		Subtitle: "what docker network create takes, without the flags",
+		Fields: []components.Field{
+			{Name: "name", Label: "name", Required: true},
+			{Name: "driver", Label: "driver", Value: "bridge", Options: drivers, Hint: driverHint},
+			{Name: "attachable", Label: "attachable", Value: "yes", Options: []string{"yes", "no"},
+				Hint: "overlay only: plain containers may join it too"},
+			{Name: "encrypted", Label: "encrypted", Value: "no", Options: []string{"no", "yes"},
+				Hint: "overlay only: IPsec between nodes, slower"},
+			{Name: "internal", Label: "internal", Value: "no", Options: []string{"no", "yes"},
+				Hint: "yes: no way out to the outside world"},
+			{Name: "subnet", Label: "subnet", Hint: "optional, such as 10.30.0.0/24"},
+		},
+		Run: func(values map[string]string) tea.Cmd {
+			overlay := values["driver"] == "overlay"
+			return cmds.CreateNetwork(v.deps.Ctx, v.deps.Client, docker.NetworkSpec{
+				Name:       values["name"],
+				Driver:     values["driver"],
+				Attachable: overlay && values["attachable"] == "yes",
+				Encrypted:  overlay && values["encrypted"] == "yes",
+				Internal:   values["internal"] == "yes",
+				Subnet:     values["subnet"],
+			})
+		},
+	})
 }
 
 func (v *Networks) current() (docker.Network, bool) {
@@ -264,14 +298,25 @@ func (v *Networks) removeConfirm() tea.Cmd {
 			"Containers are still attached, so the daemon will refuse: "+strings.Join(attached, ", "))
 	}
 
-	return request(ConfirmRequest{
+	req := ConfirmRequest{
 		Severity: components.SevConfirm,
 		Title:    fmt.Sprintf("Remove %d network(s)", len(removable)),
 		Body:     body,
 		Run: func() tea.Cmd {
 			return cmds.RemoveNetworks(v.deps.Ctx, v.deps.Client, removable)
 		},
-	})
+	}
+	for _, id := range removable {
+		if byID[id].Ingress {
+			// Removing the routing mesh is done to recreate it with another
+			// subnet, and until then no service publishes a port anywhere.
+			req.Severity, req.Word = components.SevTyped, "ingress"
+			req.Body = append(req.Body, "",
+				"ingress is the routing mesh: until a new one is created, no service of the swarm",
+				"publishes a port on any node. The daemon refuses while a service publishes one.")
+		}
+	}
+	return request(req)
 }
 
 // Hints are the footer bindings.

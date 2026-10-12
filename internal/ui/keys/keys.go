@@ -11,29 +11,36 @@ import "github.com/charmbracelet/bubbles/key"
 // view rather than scrolling: no table here scrolls sideways, it drops
 // low-priority columns instead (AGENTS.md section 9.1).
 type Global struct {
-	Up        key.Binding
-	Down      key.Binding
-	PageUp    key.Binding
-	PageDown  key.Binding
-	Home      key.Binding
-	End       key.Binding
-	NextView  key.Binding
-	PrevView  key.Binding
-	View1     key.Binding
-	View2     key.Binding
-	View3     key.Binding
-	View4     key.Binding
-	View5     key.Binding
-	View6     key.Binding
-	Filter    key.Binding
-	Sort      key.Binding
-	SortRev   key.Binding
-	Mark      key.Binding
-	MarkAll   key.Binding
-	Escape    key.Binding
-	Help      key.Binding
-	Refresh   key.Binding
-	Tasks     key.Binding
+	Up       key.Binding
+	Down     key.Binding
+	PageUp   key.Binding
+	PageDown key.Binding
+	Home     key.Binding
+	End      key.Binding
+	NextView key.Binding
+	PrevView key.Binding
+	// Right and Left walk the views too, and through the sections of a view
+	// that has some on the way: Swarm's are sub-tabs the arrows step into.
+	Right   key.Binding
+	Left    key.Binding
+	View1   key.Binding
+	View2   key.Binding
+	View3   key.Binding
+	View4   key.Binding
+	View5   key.Binding
+	View6   key.Binding
+	View7   key.Binding
+	Filter  key.Binding
+	Sort    key.Binding
+	SortRev key.Binding
+	Mark    key.Binding
+	MarkAll key.Binding
+	Escape  key.Binding
+	Help    key.Binding
+	Refresh key.Binding
+	Tasks   key.Binding
+	// Settings reopens the choice of tabs made on the first run.
+	Settings  key.Binding
 	Quit      key.Binding
 	ForceQuit key.Binding
 }
@@ -96,6 +103,35 @@ type Compose struct {
 	Expand      key.Binding
 }
 
+// Swarm bindings apply to the Swarm view. Several share a key across its
+// sections, the way S means stop in one view and drain in another: each
+// section only answers to the ones that make sense on its rows.
+type Swarm struct {
+	// Sections only names the arrows for the hint bar and the help; Right
+	// and Left in Global are what is matched.
+	Sections  key.Binding
+	Expand    key.Binding
+	Logs      key.Binding
+	LogsAll   key.Binding
+	Exec      key.Binding
+	ScaleUp   key.Binding
+	ScaleDown key.Binding
+	Deploy    key.Binding
+	Redeploy  key.Binding
+	Rollback  key.Binding
+	Remove    key.Binding
+	Edit      key.Binding
+	View      key.Binding
+	Config    key.Binding
+	New       key.Binding
+	Drain     key.Binding
+	Pause     key.Binding
+	Init      key.Binding
+	Join      key.Binding
+	Unlock    key.Binding
+	Palette   key.Binding
+}
+
 // Disk bindings apply to the disk view.
 type Disk struct {
 	Refresh     key.Binding
@@ -135,6 +171,7 @@ type Map struct {
 	Images     Images
 	Objects    Objects
 	Compose    Compose
+	Swarm      Swarm
 	Disk       Disk
 	Panel      Panel
 	Modal      Modal
@@ -144,20 +181,26 @@ type Map struct {
 func Default() Map {
 	return Map{
 		Global: Global{
-			Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "up")),
-			Down:      key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "down")),
-			PageUp:    key.NewBinding(key.WithKeys("pgup", "ctrl+b"), key.WithHelp("pgup", "page up")),
-			PageDown:  key.NewBinding(key.WithKeys("pgdown", "ctrl+f"), key.WithHelp("pgdn", "page down")),
-			Home:      key.NewBinding(key.WithKeys("home", "g"), key.WithHelp("g", "first")),
-			End:       key.NewBinding(key.WithKeys("end", "G"), key.WithHelp("G", "last")),
-			NextView:  key.NewBinding(key.WithKeys("tab", "right"), key.WithHelp("tab/right", "next view")),
-			PrevView:  key.NewBinding(key.WithKeys("shift+tab", "left"), key.WithHelp("shift+tab/left", "previous view")),
-			View1:     key.NewBinding(key.WithKeys("1"), key.WithHelp("1", "containers")),
-			View2:     key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "compose")),
-			View3:     key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "images")),
-			View4:     key.NewBinding(key.WithKeys("4"), key.WithHelp("4", "volumes")),
-			View5:     key.NewBinding(key.WithKeys("5"), key.WithHelp("5", "networks")),
-			View6:     key.NewBinding(key.WithKeys("6"), key.WithHelp("6", "disk")),
+			Up:       key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "up")),
+			Down:     key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "down")),
+			PageUp:   key.NewBinding(key.WithKeys("pgup", "ctrl+b"), key.WithHelp("pgup", "page up")),
+			PageDown: key.NewBinding(key.WithKeys("pgdown", "ctrl+f"), key.WithHelp("pgdn", "page down")),
+			Home:     key.NewBinding(key.WithKeys("home", "g"), key.WithHelp("g", "first")),
+			End:      key.NewBinding(key.WithKeys("end", "G"), key.WithHelp("G", "last")),
+			NextView: key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next view")),
+			PrevView: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous view")),
+			Right:    key.NewBinding(key.WithKeys("right"), key.WithHelp("right", "next view or section")),
+			Left:     key.NewBinding(key.WithKeys("left"), key.WithHelp("left", "previous view or section")),
+			// The digits follow the tabs that are shown, so what each one
+			// opens depends on which tabs are turned on: the help names them
+			// together rather than one by one.
+			View1:     key.NewBinding(key.WithKeys("1"), key.WithHelp("1", "first tab")),
+			View2:     key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "second tab")),
+			View3:     key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "third tab")),
+			View4:     key.NewBinding(key.WithKeys("4"), key.WithHelp("4", "fourth tab")),
+			View5:     key.NewBinding(key.WithKeys("5"), key.WithHelp("5", "fifth tab")),
+			View6:     key.NewBinding(key.WithKeys("6"), key.WithHelp("6", "sixth tab")),
+			View7:     key.NewBinding(key.WithKeys("7"), key.WithHelp("7", "seventh tab")),
 			Filter:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 			Sort:      key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "cycle sort")),
 			SortRev:   key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "reverse sort")),
@@ -167,6 +210,7 @@ func Default() Map {
 			Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 			Refresh:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 			Tasks:     key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "tasks")),
+			Settings:  key.NewBinding(key.WithKeys(","), key.WithHelp(",", "choose the tabs")),
 			Quit:      key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 			ForceQuit: key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 		},
@@ -224,6 +268,29 @@ func Default() Map {
 			DownVolumes: key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "down -v --remove-orphans")),
 			Expand:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "fold the stack, from its project line")),
 		},
+		Swarm: Swarm{
+			Sections:  key.NewBinding(key.WithKeys("left", "right"), key.WithHelp("←/→", "sections")),
+			Expand:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "fold, or detail")),
+			Logs:      key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "logs of this row")),
+			LogsAll:   key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "logs of the whole stack")),
+			Exec:      key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "shell in a task here")),
+			ScaleUp:   key.NewBinding(key.WithKeys("+", "="), key.WithHelp("+", "scale up")),
+			ScaleDown: key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "scale down")),
+			Deploy:    key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "deploy the stack")),
+			Redeploy:  key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "restart every task")),
+			Rollback:  key.NewBinding(key.WithKeys("B"), key.WithHelp("B", "roll back")),
+			Remove:    key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "remove")),
+			Edit:      key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "edit")),
+			View:      key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "read")),
+			Config:    key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "resolved stack file")),
+			New:       key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new")),
+			Drain:     key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "drain/activate")),
+			Pause:     key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "pause/activate")),
+			Init:      key.NewBinding(key.WithKeys("I"), key.WithHelp("I", "create a swarm")),
+			Join:      key.NewBinding(key.WithKeys("J"), key.WithHelp("J", "join a swarm")),
+			Unlock:    key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "unlock")),
+			Palette:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "actions")),
+		},
 		Disk: Disk{
 			Refresh:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "recompute df")),
 			Prune:       key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "prune this category")),
@@ -252,6 +319,9 @@ func Default() Map {
 type Section struct {
 	Title    string
 	Bindings []key.Binding
+	// Feature names the optional tab a section belongs to, "compose" or
+	// "swarm", so the help leaves it out while that tab is turned off.
+	Feature string
 	// Notes are the sentences a section needs that are not bindings: a rule
 	// worth stating once, above the keys it governs. They are laid out across
 	// the width rather than into a column, because a rule cut off at
@@ -267,7 +337,8 @@ func (m Map) Sections() []Section {
 	return []Section{
 		{Title: "navigation", Bindings: []key.Binding{
 			g.Up, g.Down, g.PageUp, g.PageDown, g.Home, g.End,
-			g.NextView, g.PrevView, g.View1, g.View2, g.View3, g.View4, g.View5, g.View6,
+			g.NextView, g.PrevView, g.Right, g.Left,
+			key.NewBinding(key.WithKeys("1"), key.WithHelp("1-7", "tabs, in order")),
 		}},
 		// Selecting is the one thing in here that is not obvious, so it says
 		// what it is for rather than what it is called.
@@ -285,14 +356,7 @@ func (m Map) Sections() []Section {
 			m.Containers.Pause, m.Containers.Kill, m.Containers.Remove,
 			m.Containers.New, m.Containers.Edit, m.Containers.Palette,
 		}},
-		{Title: "images", Bindings: []key.Binding{
-			m.Images.Detail, m.Images.History, m.Images.Run, m.Images.Pull,
-			m.Images.Fetch, m.Images.Remove, m.Images.Force, m.Images.Palette,
-		}},
-		{Title: "volumes and networks", Bindings: []key.Binding{
-			m.Objects.Detail, m.Objects.Remove, m.Objects.Force, m.Objects.Palette,
-		}},
-		{Title: "compose, where actions apply to the row under the cursor", Notes: []string{
+		{Title: "compose, where actions apply to the row under the cursor", Feature: "compose", Notes: []string{
 			"The project line folds the stack and acts on all of it; a service line acts on that service.",
 			"A stack whose compose file is gone cannot be brought up, but S, R, D and X still stop and " +
 				"remove what it left behind, through the engine API.",
@@ -303,6 +367,31 @@ func (m Map) Sections() []Section {
 			m.Compose.ScaleUp, m.Compose.ScaleDown, m.Compose.Config,
 			m.Compose.Drift, m.Compose.Down, m.Compose.DownVolumes,
 		}},
+		{Title: "swarm, where enter folds what the line heads", Feature: "swarm", Notes: []string{
+			"The arrows walk services, nodes, secrets, configs and cluster like tabs: past the last section, " +
+				"right goes on to the next tab, and tab jumps straight there.",
+			"enter folds what the line heads: a stack, the tasks of a service or of a node. " +
+				"On a task, a secret or a setting, it opens the detail instead.",
+			"On a stack line, actions mean the whole stack; on a service line, that service.",
+			"Off a manager, the view says where this node stands, and offers what can be done from there.",
+		}, Bindings: []key.Binding{
+			m.Swarm.Sections, m.Swarm.Expand,
+			m.Swarm.Logs, m.Swarm.LogsAll, m.Swarm.Exec,
+			m.Swarm.ScaleUp, m.Swarm.ScaleDown, m.Swarm.Deploy, m.Swarm.Redeploy, m.Swarm.Rollback,
+			m.Swarm.Remove, m.Swarm.Edit, m.Swarm.View, m.Swarm.Config, m.Swarm.New,
+			key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "drain or activate a node")),
+			key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "pause or activate a node")),
+			m.Swarm.Init, m.Swarm.Join,
+			key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "unlock a locked manager")),
+			m.Swarm.Palette,
+		}},
+		{Title: "images", Bindings: []key.Binding{
+			m.Images.Detail, m.Images.History, m.Images.Run, m.Images.Pull,
+			m.Images.Fetch, m.Images.Remove, m.Images.Force, m.Images.Palette,
+		}},
+		{Title: "volumes and networks", Bindings: []key.Binding{
+			m.Objects.Detail, m.Objects.Remove, m.Objects.Force, m.Objects.Palette,
+		}},
 		{Title: "disk", Bindings: []key.Binding{
 			m.Disk.Refresh, m.Disk.Toggle, m.Disk.Prune, m.Disk.PruneGlobal,
 		}},
@@ -311,7 +400,7 @@ func (m Map) Sections() []Section {
 			m.Panel.Next, m.Panel.Prev, m.Panel.Follow, m.Panel.Wrap,
 		}},
 		{Title: "session", Bindings: []key.Binding{
-			g.Tasks, g.Help, g.Quit, g.ForceQuit,
+			g.Tasks, g.Settings, g.Help, g.Quit, g.ForceQuit,
 		}},
 		{Title: "mouse", Bindings: []key.Binding{
 			key.NewBinding(key.WithKeys("wheel"), key.WithHelp("wheel", "scroll")),
@@ -336,5 +425,8 @@ func (m Map) Destructive() []key.Binding {
 		m.Compose.Down, m.Compose.DownVolumes, m.Compose.New, m.Compose.Edit,
 		m.Images.Fetch, m.Images.Run, m.Containers.New, m.Containers.Start,
 		m.Disk.Prune, m.Disk.PruneGlobal,
+		m.Swarm.ScaleUp, m.Swarm.ScaleDown, m.Swarm.Deploy, m.Swarm.Redeploy, m.Swarm.Rollback,
+		m.Swarm.Remove, m.Swarm.Edit, m.Swarm.Drain, m.Swarm.Pause,
+		m.Swarm.Init, m.Swarm.Join, m.Swarm.Unlock,
 	}
 }

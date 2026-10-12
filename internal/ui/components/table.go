@@ -704,15 +704,37 @@ func (t *Table) renderRow(r Row, selected bool, widths []int) string {
 	case selected:
 		// Padded to the full width so the cursor reads as a band across the
 		// table rather than as a highlight that stops mid-row.
-		line = s.RowSelected.Render(padRight(line, t.width-2))
+		line = band(s.RowSelected, padRight(line, t.width-2))
 	case marked:
-		line = s.RowMarked.Render(padRight(line, t.width-2))
+		line = band(s.RowMarked, padRight(line, t.width-2))
 	case r.Warn:
 		line = s.Warning.Render(line)
 	case r.Dim:
 		line = s.Dim.Render(line)
 	}
 	return prefix + line
+}
+
+// band paints a row across its width. A cell can carry colour of its own in
+// its text, such as the state dot in front of a container's name, and the
+// reset that ends it would end the band's background with it: the band then
+// stopped at the first dot, which on the containers view is the first
+// character. Every reset inside is followed by the band again, so the
+// background holds to the end of the row and the dot keeps its colour on it.
+func band(st lipgloss.Style, line string) string {
+	open, _, found := strings.Cut(st.Render("\x00"), "\x00")
+	if !found || open == "" {
+		// No colour profile, as under a test or a monochrome terminal:
+		// nothing to carry over.
+		return st.Render(line)
+	}
+	return st.Render(carryBand(line, open))
+}
+
+// carryBand reopens the band after every reset inside a line.
+func carryBand(line, open string) string {
+	line = strings.ReplaceAll(line, "\x1b[0m", "\x1b[0m"+open)
+	return strings.ReplaceAll(line, "\x1b[m", "\x1b[m"+open)
 }
 
 // layout computes per-column widths for the current terminal width, dropping

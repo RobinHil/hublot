@@ -687,7 +687,7 @@ func TestLiveCreateVolumeAndNetwork(t *testing.T) {
 		t.Error("the volume we created is not listed")
 	}
 
-	if err := c.CreateNetwork(ctx, "hublot-live-created-net"); err != nil {
+	if err := c.CreateNetwork(ctx, NetworkSpec{Name: "hublot-live-created-net"}); err != nil {
 		t.Fatalf("create network: %v", err)
 	}
 	networks, err := c.ListNetworks(ctx)

@@ -135,15 +135,44 @@ func (v *Containers) row(c docker.Container) components.Row {
 			components.Styled(formatIO(st.NetRx, st.NetTx), s.Dim),
 			components.Styled(formatStatus(c), theme.StateStyle(c.State)),
 			components.Styled(formatPorts(c.Ports), s.Accent),
-			components.Styled(compose.ProjectOf(c.Labels), s.Dim),
+			components.Styled(ownerOf(c), s.Dim),
 		},
 	}
 }
 
+// ownerOf names what a container belongs to: its compose project, or for a
+// swarm task its stack, or its service when it was deployed alone.
+func ownerOf(c docker.Container) string {
+	if p := compose.ProjectOf(c.Labels); p != "" {
+		return p
+	}
+	if st := c.Labels[docker.LabelStackNamespace]; st != "" {
+		return st
+	}
+	return c.Labels[docker.LabelSwarmService]
+}
+
+// swarmTasks lists the containers of a selection the swarm runs as tasks.
+func swarmTasks(cs []docker.Container) []string {
+	var out []string
+	for _, c := range cs {
+		if svc := c.Labels[docker.LabelSwarmService]; svc != "" {
+			out = append(out, c.Name)
+		}
+	}
+	return out
+}
+
 // stateDot is the light at the head of every row: colour says running, paused
-// or gone before the word does.
+// or gone before the word does. A stopped container's dot is muted rather than
+// faint: faint is drawn to disappear into the background, and on the band of
+// the row under the cursor it disappeared entirely.
 func stateDot(state string) string {
-	return theme.StateStyle(state).Render("●")
+	st := theme.StateStyle(state)
+	if st.GetForeground() == theme.Current().Faint.GetForeground() {
+		st = theme.Current().Dim
+	}
+	return st.Render("●")
 }
 
 // styleOf adapts a style for a cell, which keeps its own pointer.
@@ -253,6 +282,15 @@ func (v *Containers) edit(current docker.Container, hasCurrent bool) tea.Cmd {
 	if v.deps.ReadOnly {
 		return denied()
 	}
+	if svc := current.Labels[docker.LabelSwarmService]; svc != "" {
+		// A rebuild would create a container the swarm knows nothing about,
+		// next to the task it would go on running anyway.
+		return v.info(current.Name+" is a task of the swarm service "+svc, []string{
+			"The swarm made it from the service's spec and replaces it when it goes, so",
+			"rebuilding it here would leave a container the swarm knows nothing about.",
+			"E on the service, in the Swarm view, edits what every one of its tasks is made from.",
+		})
+	}
 	return cmds.LoadContainerSpec(v.deps.Ctx, v.deps.Client, current.ID)
 }
 
@@ -302,7 +340,21 @@ func (v *Containers) reversible(label string, run func([]string) tea.Cmd) tea.Cm
 	if len(targets) == 0 {
 		return nil
 	}
-	_ = label
+	// A task of the swarm is replaced as soon as it stops: stopping one is
+	// not stopping the service, and that is worth saying before it happens.
+	if tasks := swarmTasks(targets); len(tasks) > 0 {
+		return request(ConfirmRequest{
+			Severity: components.SevConfirm,
+			Title:    strings.ToUpper(label[:1]) + label[1:] + " swarm tasks?",
+			Body: []string{
+				"These are tasks of swarm services: " + strings.Join(tasks, ", "),
+				"",
+				"The swarm starts a replacement as soon as a task stops, so this does not",
+				"stop the service. Scaling it, or draining the node, in the Swarm view does.",
+			},
+			Run: func() tea.Cmd { return run(ids(targets)) },
+		})
+	}
 	return run(ids(targets))
 }
 
@@ -331,6 +383,10 @@ func (v *Containers) removeConfirm() tea.Cmd {
 			"",
 			fmt.Sprintf("%d of them are running and will be killed first: %s",
 				len(running), strings.Join(running, ", ")))
+	}
+	if tasks := swarmTasks(targets); len(tasks) > 0 {
+		body = append(body, "",
+			"Some are swarm tasks, which the swarm replaces at once: "+strings.Join(tasks, ", "))
 	}
 	if p := composeProjects(targets); len(p) > 0 {
 		body = append(body, "",

@@ -15,6 +15,7 @@ import (
 	"github.com/RobinHil/hublot/internal/config"
 	"github.com/RobinHil/hublot/internal/docker"
 	"github.com/RobinHil/hublot/internal/state"
+	"github.com/RobinHil/hublot/internal/swarm"
 	"github.com/RobinHil/hublot/internal/ui/cmds"
 	"github.com/RobinHil/hublot/internal/ui/components"
 	"github.com/RobinHil/hublot/internal/ui/keys"
@@ -36,9 +37,13 @@ type App struct {
 	keys   keys.Map
 	cli    compose.CLI
 
-	views  []views.View
-	active int
-	tasks  components.TaskPanel
+	// catalog is every view in tab order; views is the ones shown, which is
+	// what the tab bar, the digits and the active index refer to.
+	catalog []views.View
+	views   []views.View
+	active  int
+	tabs    config.Tabs
+	tasks   components.TaskPanel
 
 	// The side panel: logs, inspect output, anything worth reading next to the
 	// list rather than instead of it.
@@ -68,8 +73,14 @@ type App struct {
 	// What each running compose task was doing, so a failure can offer to open
 	// the file behind it and run the same command again.
 	taskOf map[string]composeTask
+	// stackOf is the same for a stack deploy: what was deployed, so a
+	// failure can offer the file and the deploy again.
+	stackOf map[string]views.SwarmRunRequest
 
 	events <-chan docker.EventUpdate
+
+	// taskPolling is set while tasks are polled for the Swarm view.
+	taskPolling bool
 
 	// What every view was given, kept because a form the app opens on a view's
 	// behalf is built from the same dependencies the view has.
@@ -84,7 +95,7 @@ type App struct {
 
 // New builds the root model. The context it is given is cancelled on quit,
 // which is what stops every stream.
-func New(ctx context.Context, client *docker.Client, cfg config.Config, cli compose.CLI, readOnly bool) *App {
+func New(ctx context.Context, client *docker.Client, cfg config.Config, cli compose.CLI, swarmCLI swarm.CLI, readOnly bool) *App {
 	ctx, cancel := context.WithCancel(ctx)
 
 	// The theme is the one package-level variable in the codebase, set once
@@ -98,6 +109,10 @@ func New(ctx context.Context, client *docker.Client, cfg config.Config, cli comp
 	store.VolumePruneAll = client.SupportsVolumePruneAll()
 	store.ReadOnly = readOnly
 	store.ComposeCLI = cli
+	store.SwarmCLI = swarmCLI
+	for stack, files := range cfg.Stacks {
+		store.StackFiles[stack] = files
+	}
 
 	k := keys.Default()
 	deps := views.Deps{
@@ -109,6 +124,7 @@ func New(ctx context.Context, client *docker.Client, cfg config.Config, cli comp
 		ReadOnly:    readOnly,
 		StopTimeout: cfg.StopTimeout,
 		Shell:       cfg.Shell,
+		SwarmCLI:    swarmCLI,
 	}
 
 	app := &App{
@@ -128,22 +144,35 @@ func New(ctx context.Context, client *docker.Client, cfg config.Config, cli comp
 		logCh:        make(chan docker.LogLine, 512),
 		taskCh:       make(chan taskEvent, 256),
 		taskOf:       map[string]composeTask{},
+		stackOf:      map[string]views.SwarmRunRequest{},
 	}
 
-	containers := views.NewContainers(deps)
-	// Compose comes second because that is how hosts are actually run: stacks
-	// first, then the loose objects underneath them. The order here is the
-	// order of the tabs and of the digit keys, and nothing else depends on it.
-	app.views = []views.View{
-		containers,
+	// Stacks come right after the containers because that is how hosts are
+	// actually run, compose then swarm, and the loose objects underneath them
+	// after. This is the order of the tabs; which of them are shown, and so
+	// which digit opens what, is decided by arrangeViews.
+	app.catalog = []views.View{
+		views.NewContainers(deps),
 		views.NewCompose(deps),
+		views.NewSwarm(deps),
 		views.NewImages(deps),
 		views.NewVolumes(deps),
 		views.NewNetworks(deps),
 		views.NewDisk(deps),
 	}
 
-	if !cli.Available {
+	// Nobody has chosen the optional tabs yet: start from what this machine
+	// has a use for, and ask. Dismissing the question keeps that for the
+	// session without saving it, so it is asked again next time.
+	if cfg.Tabs != nil {
+		app.tabs = *cfg.Tabs
+	} else {
+		app.tabs = defaultTabs(cli.Available, store.Info.Swarm)
+		app.openTabsForm()
+	}
+	app.arrangeViews()
+
+	if app.tabs.Compose && !cli.Available {
 		app.setMessage("compose actions disabled: "+cli.Reason, true)
 	}
 
@@ -155,8 +184,7 @@ func (a *App) Init() tea.Cmd {
 	a.events = a.client.StreamEvents(a.ctx)
 
 	return tea.Batch(
-		cmds.RefreshAll(a.ctx, a.client),
-		cmds.LoadInfo(a.ctx, a.client),
+		a.refreshAll(),
 		cmds.Tick(),
 		waitForEvents(a.events),
 		waitForStats(a.statsCh),
@@ -208,11 +236,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if modal, ok := a.explain(a.tasks.Output(m.TaskID)); ok {
 				modal.Body = append(modal.Body, "", "The whole output is in the task panel, which t opens.")
 				a.offerFix(&modal, a.taskOf[m.TaskID], a.tasks.Output(m.TaskID))
+				if req, ok := a.stackOf[m.TaskID]; ok {
+					a.offerStackFix(&modal, req)
+				}
 				a.openModal(modal)
 			}
 			delete(a.taskOf, m.TaskID)
+			delete(a.stackOf, m.TaskID)
 		}
-		return a, tea.Batch(waitForTasks(a.taskCh), cmds.RefreshAll(a.ctx, a.client))
+		return a, tea.Batch(waitForTasks(a.taskCh), a.refreshAll())
 
 	case StreamClosedMsg:
 		// Only the per-source channels the app owns are restarted; the event
@@ -250,9 +282,48 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case cmds.InfoMsg:
-		if m.Err == nil {
-			a.store.Info = m.Info
+		return a, a.applyInfo(m)
+
+	case cmds.SwarmMsg:
+		a.applySwarm(m)
+		// A swarm created or joined from the open tab has tasks to watch
+		// from now on, without the tab being left and entered again.
+		if a.swarmVisible() {
+			return a, a.startTaskPoll()
 		}
+		return a, nil
+
+	case cmds.TasksMsg:
+		if m.Err == nil {
+			a.store.SetTasks(m.Tasks)
+			a.refreshViews()
+		}
+		return a, nil
+
+	case cmds.ServicesMsg:
+		if m.Err == nil {
+			a.store.SetServices(m.Services)
+			a.refreshViews()
+		}
+		return a, nil
+
+	case cmds.TaskTickMsg:
+		return a, a.taskTick()
+
+	case cmds.ServiceSpecMsg:
+		return a, a.editServiceSpec(m)
+
+	case views.SwarmRunRequest:
+		return a, a.runSwarm(m)
+
+	case swarmPreflightMsg:
+		return a, a.preflightDone(m)
+
+	case views.SwarmLogsRequest:
+		return a, a.openSwarmLogs(m)
+
+	case views.RememberStackRequest:
+		a.rememberStack(m.Stack, m.Files)
 		return a, nil
 
 	case cmds.DiskMsg:
@@ -290,7 +361,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.setMessage(m.Label, false)
 		}
 		if m.Refresh {
-			return a, cmds.RefreshAll(a.ctx, a.client)
+			return a, a.refreshAll()
 		}
 		return a, nil
 
@@ -356,11 +427,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case views.ConfirmRequest:
 		a.modalRun = m.Run
-		a.openModal(components.NewModal(m.Severity, m.Title, m.Body, nil))
+		modal := components.NewModal(m.Severity, m.Title, m.Body, nil)
+		modal.SetWord(m.Word)
+		a.openModal(modal)
 		return a, nil
 
 	case views.PromptRequest:
 		p := components.NewPrompt(m.Title, m.Body, m.Label, m.Initial, m.Run)
+		if m.Secret {
+			p.Mask()
+		}
 		p.SetSize(a.width, a.height)
 		a.prompt = &p
 		return a, textinput.Blink
@@ -408,7 +484,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.setMessage("left the shell in "+m.name, false)
 		}
 		// A shell can have changed anything, and events only cover some of it.
-		return a, cmds.RefreshAll(a.ctx, a.client)
+		return a, a.refreshAll()
 
 	case views.ComposeRunRequest:
 		return a, a.runCompose(m)
@@ -511,8 +587,15 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, a.keys.Global.Tasks):
 			a.tasks.Toggle()
 			return a, nil
+		case key.Matches(msg, a.keys.Global.Settings):
+			a.openTabsForm()
+			return a, nil
 		case key.Matches(msg, a.keys.Global.Refresh):
 			return a, a.forceRefresh()
+		case key.Matches(msg, a.keys.Global.Right):
+			return a, a.arrow(1)
+		case key.Matches(msg, a.keys.Global.Left):
+			return a, a.arrow(-1)
 		case key.Matches(msg, a.keys.Global.NextView):
 			a.switchView(a.active + 1)
 			return a, a.enterView()
@@ -520,7 +603,7 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.switchView(a.active - 1)
 			return a, a.enterView()
 		}
-		if n, ok := viewNumber(msg, a.keys.Global); ok {
+		if n, ok := viewNumber(msg, a.keys.Global); ok && n < len(a.views) {
 			a.switchView(n)
 			return a, a.enterView()
 		}
@@ -647,7 +730,7 @@ func (a *App) panelTop(l Layout) int {
 
 // viewNumber maps the digit keys to a tab index.
 func viewNumber(msg tea.KeyMsg, g keys.Global) (int, bool) {
-	for i, b := range []key.Binding{g.View1, g.View2, g.View3, g.View4, g.View5, g.View6} {
+	for i, b := range []key.Binding{g.View1, g.View2, g.View3, g.View4, g.View5, g.View6, g.View7} {
 		if key.Matches(msg, b) {
 			return i, true
 		}
@@ -688,6 +771,9 @@ func (a *App) switchView(n int) {
 // then, and the Disk view is left alone: df is too slow to trigger by
 // navigation (AGENTS.md sections 6.6 and 7).
 func (a *App) enterView() tea.Cmd {
+	if a.swarmVisible() {
+		return a.startTaskPoll()
+	}
 	if _, ok := a.views[a.active].(*views.Compose); !ok {
 		return nil
 	}
@@ -709,9 +795,9 @@ func (a *App) forceRefresh() tea.Cmd {
 	if _, ok := a.views[a.active].(*views.Disk); ok {
 		a.diskView().SetLoading(true)
 		a.refreshViews()
-		return tea.Batch(cmds.RefreshAll(a.ctx, a.client), cmds.DiskUsage(a.ctx, a.client))
+		return tea.Batch(a.refreshAll(), cmds.DiskUsage(a.ctx, a.client))
 	}
-	return tea.Batch(cmds.RefreshAll(a.ctx, a.client), cmds.LoadInfo(a.ctx, a.client))
+	return a.refreshAll()
 }
 
 func (a *App) diskView() *views.Disk {
@@ -729,7 +815,7 @@ func (a *App) tick() tea.Cmd {
 	if a.message != "" && time.Since(a.messageAt) > messageTTL {
 		a.message = ""
 	}
-	return tea.Batch(cmds.RefreshAll(a.ctx, a.client), cmds.Tick())
+	return tea.Batch(a.refreshAll(), cmds.Tick())
 }
 
 // handleEvent applies one daemon event: events are the source of truth for
@@ -749,7 +835,7 @@ func (a *App) handleEvent(u docker.EventUpdate) tea.Cmd {
 		a.store.Stale = false
 		a.store.StaleErr = nil
 		a.setMessage("daemon back, resyncing", false)
-		return tea.Batch(next, cmds.RefreshAll(a.ctx, a.client), cmds.LoadInfo(a.ctx, a.client))
+		return tea.Batch(next, a.refreshAll())
 	}
 
 	e := u.Event
@@ -769,6 +855,7 @@ func (a *App) handleEvent(u docker.EventUpdate) tea.Cmd {
 	if e.StopsContainer() {
 		a.stopStats(e.ActorID)
 	}
+	batch = append(batch, a.swarmEvent(e)...)
 
 	return tea.Batch(append(batch, next)...)
 }

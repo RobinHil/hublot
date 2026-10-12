@@ -13,5 +13,5 @@ Exec=hublot
 # and it exits.
 Terminal=true
 Categories=System;Monitor;ConsoleOnly;
-Keywords=docker;container;compose;monitor;prune;disk;
-Keywords[fr]=docker;conteneur;compose;surveillance;disque;
+Keywords=docker;container;compose;swarm;monitor;prune;disk;
+Keywords[fr]=docker;conteneur;compose;swarm;surveillance;disque;

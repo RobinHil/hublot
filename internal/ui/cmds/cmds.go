@@ -510,10 +510,10 @@ func CreateVolume(ctx context.Context, c *docker.Client, name string) tea.Cmd {
 	})
 }
 
-// CreateNetwork makes a user-defined bridge network.
-func CreateNetwork(ctx context.Context, c *docker.Client, name string) tea.Cmd {
-	return each(ctx, "create network "+name, []string{name}, func(name string) error {
-		return c.CreateNetwork(ctx, name)
+// CreateNetwork makes a user-defined network.
+func CreateNetwork(ctx context.Context, c *docker.Client, spec docker.NetworkSpec) tea.Cmd {
+	return each(ctx, "create network "+spec.Name, []string{spec.Name}, func(string) error {
+		return c.CreateNetwork(ctx, spec)
 	})
 }
 

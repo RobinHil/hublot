@@ -97,6 +97,9 @@ func (v *Volumes) row(vol docker.Volume, users []string) components.Row {
 	if vol.Anonymous {
 		name = truncateID(vol.Name) + " (anonymous)"
 	}
+	if vol.Cluster {
+		name += " (cluster, " + vol.Availability + ")"
+	}
 
 	mounted := strings.Join(users, ", ")
 	if mounted == "" {
@@ -111,10 +114,18 @@ func (v *Volumes) row(vol docker.Volume, users []string) components.Row {
 			components.Txt(vol.Driver),
 			components.Txt(state.FormatBytes(vol.Size)),
 			components.Txt(mounted),
-			components.Styled(vol.Labels[compose.LabelProject], s.Accent),
+			components.Styled(volumeOwner(vol), s.Accent),
 			components.Txt(formatAge(vol.CreatedAt)),
 		},
 	}
+}
+
+// volumeOwner names the compose project or the swarm stack a volume came from.
+func volumeOwner(vol docker.Volume) string {
+	if p := vol.Labels[compose.LabelProject]; p != "" {
+		return p
+	}
+	return vol.Labels[docker.LabelStackNamespace]
 }
 
 // Update handles the volume bindings.
@@ -204,10 +215,33 @@ func (v *Volumes) palette() tea.Cmd {
 		},
 	}
 
+	if vol.Cluster {
+		for _, a := range []string{"active", "pause", "drain"} {
+			if a == vol.Availability {
+				continue
+			}
+			to := a
+			choices = append(choices, components.Choice{
+				Label: "make it " + to, Detail: availabilityDetail(to), Destructive: true,
+				Payload: func() tea.Cmd { return cmds.SetVolumeAvailability(v.deps.Ctx, v.deps.Client, name, to) },
+			})
+		}
+	}
+
 	if v.deps.ReadOnly {
 		choices = keepSafe(choices)
 	}
 	return request(PickerRequest{Title: "Actions on " + name, Choices: choices})
+}
+
+func availabilityDetail(a string) string {
+	switch a {
+	case "pause":
+		return "no new task may use it"
+	case "drain":
+		return "and the tasks using it are stopped"
+	}
+	return "tasks may use it again"
 }
 
 // removeConfirm names the data at stake: a volume removal is the one action in

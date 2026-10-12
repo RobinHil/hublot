@@ -35,6 +35,21 @@ var (
 	lowPort    = regexp.MustCompile(`(?i)permission denied.*bind`)
 	pausedCtr  = regexp.MustCompile(`(?i)cannot (?:start|kill) a paused container`)
 
+	// Swarm, in the wording of the daemon and of swarmkit behind it.
+	ingressPort    = regexp.MustCompile(`port '(\d{1,5})' is already in use by service '([^']+)'`)
+	objectTaken    = regexp.MustCompile(`name conflicts with an existing object: (\w+) (\S+) already exists`)
+	notManager     = regexp.MustCompile(`This node is not a swarm manager`)
+	workerRefused  = regexp.MustCompile(`Worker nodes can't be used to view or modify cluster state`)
+	swarmLocked    = regexp.MustCompile(`Swarm is encrypted and needs to be unlocked`)
+	badUnlockKey   = regexp.MustCompile(`swarm could not be unlocked: invalid key`)
+	inUseBy        = regexp.MustCompile(`(secret|config) '([^']+)' is in use by the following services?: (.+)`)
+	networkInUse   = regexp.MustCompile(`network \S+ is in use by service`)
+	outOfSequence  = regexp.MustCompile(`update out of sequence`)
+	lastManager    = regexp.MustCompile(`attempting to demote the last manager of the swarm`)
+	raftMember     = regexp.MustCompile(`is a cluster manager and is a member of the raft cluster`)
+	alreadyInSwarm = regexp.MustCompile(`This node is already part of a swarm`)
+	refMissing     = regexp.MustCompile(`service (\S+): (secret|config) not found: (\S+)`)
+
 	// Compose reports a schema problem as "validating <path>: <what>", and a
 	// syntax one through the yaml parser, which names no file at all.
 	validating = regexp.MustCompile(`validating ([^\s:]+): (.+)`)
@@ -55,6 +70,9 @@ var (
 // nothing useful to add, in which case the daemon's own words are better than
 // anything invented here.
 func Diagnose(output string) (Diagnosis, bool) {
+	if d, ok := diagnoseSwarm(output); ok {
+		return d, true
+	}
 	switch {
 	case portInUse.MatchString(output):
 		d := Diagnosis{
@@ -187,7 +205,7 @@ func Diagnose(output string) (Diagnosis, bool) {
 			Lines: []string{
 				"There is no room left where docker keeps its data.",
 				"",
-				"The disk view, key 6, shows where it went and what a prune would give",
+				"The disk view shows where it went and what a prune would give",
 				"back before removing anything.",
 			},
 		}, true
@@ -269,4 +287,153 @@ type Container struct {
 // Port is a published port.
 type Port struct {
 	Public uint16
+}
+
+// diagnoseSwarm recognises the swarm failures. They come first because some
+// of them would otherwise be read as their single-host cousins: a port taken
+// on the routing mesh is not one taken on this machine.
+func diagnoseSwarm(output string) (Diagnosis, bool) {
+	switch {
+	case ingressPort.MatchString(output):
+		m := ingressPort.FindStringSubmatch(output)
+		return Diagnosis{
+			Title: "Port " + m[1] + " is already published by the service " + m[2],
+			Lines: []string{
+				"A port published through the routing mesh is opened on every node of",
+				"the swarm, so two services cannot share it, wherever their tasks run.",
+				"",
+				"Publish this one on another port, or unpublish it from " + m[2] + " first.",
+			},
+		}, true
+
+	case objectTaken.MatchString(output):
+		m := objectTaken.FindStringSubmatch(output)
+		return Diagnosis{
+			Title: "A " + m[1] + " named " + m[2] + " already exists",
+			Lines: []string{
+				"Names are unique across the swarm for each kind of object.",
+				"",
+				"Pick another name, or change the existing one rather than making a",
+				"second: it is in the Swarm view.",
+			},
+		}, true
+
+	case workerRefused.MatchString(output):
+		return Diagnosis{
+			Title: "This node is a worker",
+			Lines: []string{
+				"Only a manager answers for the swarm: its services, nodes, secrets and",
+				"configs. Open hublot on a manager, or promote this node from one.",
+			},
+		}, true
+
+	case notManager.MatchString(output):
+		return Diagnosis{
+			Title: "This daemon is not part of a swarm",
+			Lines: []string{
+				"Services, secrets, configs and overlay networks only exist in one.",
+				"",
+				"The Swarm view creates one with I or joins one with J; , turns it on.",
+			},
+		}, true
+
+	case swarmLocked.MatchString(output):
+		return Diagnosis{
+			Title: "This manager is locked",
+			Lines: []string{
+				"Autolock is on and the daemon restarted, so it cannot read the swarm's",
+				"state until it is given the unlock key.",
+				"",
+				"u in the Swarm view asks for it. Another manager shows it with",
+				"docker swarm unlock-key.",
+			},
+		}, true
+
+	case badUnlockKey.MatchString(output):
+		return Diagnosis{
+			Title: "That is not the unlock key",
+			Lines: []string{
+				"The key starts with SWMKEY-1-, and rotating it on another manager",
+				"makes the old one useless. docker swarm unlock-key, on a manager that",
+				"is unlocked, shows the current one.",
+			},
+		}, true
+
+	case inUseBy.MatchString(output):
+		m := inUseBy.FindStringSubmatch(output)
+		return Diagnosis{
+			Title: "The " + m[1] + " " + m[2] + " is still mounted",
+			Lines: []string{
+				"These services use it: " + strings.TrimSpace(m[3]) + ".",
+				"",
+				"Detach it from them first, from the palette on each service, or give",
+				"them a new version with E so the old one is free to go.",
+			},
+		}, true
+
+	case networkInUse.MatchString(output):
+		return Diagnosis{
+			Title: "A service is still attached to that network",
+			Lines: []string{
+				"A swarm network belongs to the services using it, wherever their",
+				"tasks run, so the containers on this node say nothing about it.",
+				"",
+				"The network column of the Networks view names the services; disconnect",
+				"them, or remove them, first.",
+			},
+		}, true
+
+	case outOfSequence.MatchString(output):
+		return Diagnosis{
+			Title: "It changed while you were editing it",
+			Lines: []string{
+				"Something else updated this object after hublot read it, and the swarm",
+				"refuses a change made against an older version rather than undo that one.",
+				"",
+				"Make the change again: it starts from what is there now.",
+			},
+		}, true
+
+	case lastManager.MatchString(output):
+		return Diagnosis{
+			Title: "That is the last manager",
+			Lines: []string{
+				"Without a manager nothing could change the swarm again. Promote another",
+				"node first, then demote this one.",
+			},
+		}, true
+
+	case raftMember.MatchString(output):
+		return Diagnosis{
+			Title: "A manager cannot be removed as it is",
+			Lines: []string{
+				"It holds a vote in the quorum. Demote it to a worker first, from the",
+				"palette on its line, then remove it.",
+			},
+		}, true
+
+	case refMissing.MatchString(output):
+		m := refMissing.FindStringSubmatch(output)
+		return Diagnosis{
+			Title: "The stack file names a " + m[2] + " that does not exist: " + m[3],
+			Lines: []string{
+				"The service " + m[1] + " mounts " + m[3] + ", declared external, so the deploy",
+				"expects to find it already in the swarm. It may have been rotated to a",
+				"new version, which takes a new name.",
+				"",
+				"Point the file at the " + m[2] + " that exists now, in the " + m[2] + "s section",
+				"of the Swarm view, or create one under that name.",
+			},
+		}, true
+
+	case alreadyInSwarm.MatchString(output):
+		return Diagnosis{
+			Title: "This node is already in a swarm",
+			Lines: []string{
+				"A node belongs to one swarm at a time. Leave the current one first,",
+				"from the palette in the Swarm view.",
+			},
+		}, true
+	}
+	return Diagnosis{}, false
 }

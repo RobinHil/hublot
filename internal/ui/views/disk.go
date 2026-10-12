@@ -175,6 +175,12 @@ func (v *Disk) categoryRow(cat state.Category, p state.Preview) components.Row {
 	if p.ComposeOwned > 0 {
 		detail = fmt.Sprintf("%d belong to compose projects", p.ComposeOwned)
 	}
+	if p.StackOwned > 0 {
+		if detail != "" {
+			detail += ", "
+		}
+		detail += fmt.Sprintf("%d to swarm stacks", p.StackOwned)
+	}
 	if p.Unknown > 0 {
 		if detail != "" {
 			detail += ", "
@@ -190,14 +196,14 @@ func (v *Disk) categoryRow(cat state.Category, p state.Preview) components.Row {
 	}
 
 	name := components.Txt(marker + cat.String())
-	if p.ComposeOwned > 0 {
+	if p.Owned() > 0 {
 		name = components.Styled(marker+cat.String(), s.Warning)
 	}
 
 	return components.Row{
 		ID:   categoryID(cat),
 		Dim:  p.Empty(),
-		Warn: p.ComposeOwned > 0,
+		Warn: p.Owned() > 0,
 		Cells: []components.Cell{
 			name,
 			components.Txt(fmt.Sprintf("%d", len(p.Items))),
@@ -216,16 +222,14 @@ func (v *Disk) itemRows(p state.Preview) []components.Row {
 
 	rows := make([]components.Row, 0, len(p.Items))
 	for _, it := range p.Items {
-		owner := it.Project
+		owner := it.Owner()
 		if owner == "" {
-			owner = "no compose project"
-		} else if it.Service != "" {
-			owner += " / " + it.Service
+			owner = "no compose project or stack"
 		}
 
 		rows = append(rows, components.Row{
 			ID:   categoryID(p.Category) + "/" + it.ID,
-			Warn: it.Project != "",
+			Warn: it.Owned(),
 			Cells: []components.Cell{
 				components.Txt("    " + it.Name),
 				components.Txt(""),
@@ -297,7 +301,7 @@ func reclaimStyle(p state.Preview) lipgloss.Style {
 	switch {
 	case p.Empty():
 		return s.Faint
-	case p.ComposeOwned > 0:
+	case p.Owned() > 0:
 		return s.Warning
 	default:
 		return s.Running
@@ -372,7 +376,7 @@ func (v *Disk) pruneCategory() tea.Cmd {
 	}
 
 	sev := components.SevDanger
-	if cat.Destructive() && preview.ComposeOwned > 0 {
+	if cat.Destructive() && preview.Owned() > 0 {
 		// Destroying the data of a stack that is merely stopped deserves the
 		// strongest gate there is (AGENTS.md section 10.3).
 		sev = components.SevTyped
@@ -404,7 +408,7 @@ func (v *Disk) pruneEverything() tea.Cmd {
 	for _, p := range previews {
 		cats = append(cats, p.Category)
 		total += p.Reclaimable
-		composeOwned += p.ComposeOwned
+		composeOwned += p.Owned()
 		body = append(body, p.Summary())
 		body = append(body, previewItems(p, 8)...)
 		body = append(body, "")
@@ -416,7 +420,7 @@ func (v *Disk) pruneEverything() tea.Cmd {
 	}
 	if composeOwned > 0 {
 		head = append(head,
-			fmt.Sprintf("%d of the objects below belong to compose projects, and their volumes hold data.",
+			fmt.Sprintf("%d of the objects below belong to compose projects or swarm stacks, and their volumes hold data.",
 				composeOwned))
 	}
 	head = append(head, "")
@@ -445,12 +449,8 @@ func previewItems(p state.Preview, limit int) []string {
 			break
 		}
 		line := "  " + it.Name + "  " + state.FormatBytes(it.Size)
-		if it.Project != "" {
-			line += "  [compose: " + it.Project
-			if it.Service != "" {
-				line += "/" + it.Service
-			}
-			line += "]"
+		if owner := it.Owner(); owner != "" {
+			line += "  [" + owner + "]"
 		}
 		out = append(out, line)
 	}
