@@ -112,8 +112,10 @@ jobs:
           grep -q "$ORIGIN" sitemap.xml
 
           # The screenshots are real frames kept as text; if the generator ever
-          # writes an empty set, the page still builds and shows nothing.
-          grep -q "blog-worker-1" index.html
+          # writes an empty set, the page still builds and shows nothing. The
+          # containers table's heading is in every capture whatever workload it
+          # was taken from, where a container name only holds until the next one.
+          grep -qF "NAME ^" index.html || { echo "::error::no terminal frames"; exit 1; }
 
           echo "dist is complete:"
           du -sh .
