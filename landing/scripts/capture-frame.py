@@ -5,8 +5,15 @@ running on it:
 
     python3 scripts/capture-frame.py ../dist/hublot > src/terminal-frames.ts
 """
-import json, os, pty, select, struct, sys, termios, time, fcntl
+import json, os, pty, select, struct, sys, tempfile, termios, time, fcntl
 import pyte
+
+# A configuration of its own, with every tab chosen: without one, hublot opens
+# on the question of which tabs to show, and that is what would be captured.
+CONFIG = tempfile.mkdtemp(prefix="hublot-capture-")
+os.makedirs(os.path.join(CONFIG, "hublot"))
+with open(os.path.join(CONFIG, "hublot", "config.yaml"), "w") as f:
+    f.write("tabs:\n  compose: true\n  swarm: true\n")
 
 COLS, ROWS = 104, 16
 
@@ -15,6 +22,7 @@ def capture(binary, keys, cols=COLS, rows=ROWS, settle=6.0):
     if pid == 0:
         os.environ["TERM"] = "xterm-256color"
         os.environ["COLORTERM"] = "truecolor"
+        os.environ["XDG_CONFIG_HOME"] = CONFIG
         os.execv(binary, [binary])
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
@@ -48,7 +56,7 @@ def capture(binary, keys, cols=COLS, rows=ROWS, settle=6.0):
         runs, current = [], None
         for x in range(cols):
             ch = row[x]
-            style = (ch.fg, ch.bold, ch.reverse)
+            style = (ch.fg, ch.bg, ch.bold, ch.reverse)
             if current and current[0] == style:
                 current[1].append(ch.data)
             else:
@@ -58,8 +66,8 @@ def capture(binary, keys, cols=COLS, rows=ROWS, settle=6.0):
         if current:
             runs.append(current)
         lines.append([
-            {"t": "".join(text), "c": fg, "b": bool(bold), "r": bool(rev)}
-            for (fg, bold, rev), text in runs
+            {"t": "".join(text), "c": fg, "g": bg, "b": bool(bold), "r": bool(rev)}
+            for (fg, bg, bold, rev), text in runs
         ])
 
     os.write(fd, b"q")
@@ -87,15 +95,17 @@ def capture(binary, keys, cols=COLS, rows=ROWS, settle=6.0):
 # into a single line, and the graphs are half of what these frames are for.
 frames = {
     "containers": capture(sys.argv[1], [], cols=104, rows=20),
-    # Compose is the second tab now, so this is "2" and not "5".
-    "compose": capture(sys.argv[1], ["2"], cols=80, rows=18),
+    # Compose is the second tab, with every tab turned on. Ninety-six columns:
+    # a workload showing drift, a ghost and an orphan says so in its summary
+    # line, and at eighty that line is cut mid-word.
+    "compose": capture(sys.argv[1], ["2"], cols=96, rows=18),
     # The disk frame is captured with a category expanded: the point of that
     # view is the list of objects a prune would take, not the totals.
     # Eighty-eight rather than eighty: at eighty the summary line, which is
     # what says how much of the disk is reclaimable, is cut mid-word.
     "disk": capture(
         sys.argv[1],
-        ["6", "r", "j", "j", "j", "j", "j", "j", "\r"],
+        ["7", "r", "j", "j", "j", "j", "j", "j", "\r"],
         cols=88,
         rows=18,
     ),
@@ -111,6 +121,8 @@ def compact(lines):
             run = {"t": r["t"]}
             if r["c"] != "default":
                 run["c"] = "#" + r["c"] if len(r["c"]) == 6 else r["c"]
+            if r["g"] != "default":
+                run["g"] = "#" + r["g"] if len(r["g"]) == 6 else r["g"]
             if r["b"]:
                 run["b"] = 1
             if r["r"]:
@@ -136,9 +148,11 @@ export type Run = {
   t: string;
   /** Foreground colour, absent for the terminal default. */
   c?: string;
+  /** Background colour, which is how the selected row is drawn. */
+  g?: string;
   /** Bold. */
   b?: number;
-  /** Reverse video, which is how the selected row is drawn. */
+  /** Reverse video. */
   r?: number;
 };
 

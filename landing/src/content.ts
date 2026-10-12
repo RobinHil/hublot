@@ -48,6 +48,14 @@ export type Feature = { title: string; body: string };
 
 export const features: Feature[] = [
   {
+    title: "A whole swarm, from its manager",
+    body: "Stacks, services and their tasks with the scheduler's own reason when one falls short, nodes drained or promoted behind the quorum arithmetic, secrets and configs rotated in place, and a swarm created or joined from the same tab.",
+  },
+  {
+    title: "Only the tabs you use",
+    body: "Compose and swarm are asked about on the first run and can be turned off: a host that never runs a stack keeps a shorter bar, and , changes the choice later.",
+  },
+  {
     title: "Figures that match docker stats",
     body: "CPU derived from the cumulative counters the way the CLI does it, memory with the page cache subtracted, and a dash rather than a fake zero on the first sample of a stream.",
   },
@@ -157,13 +165,14 @@ export const installs: Install[] = [
 ];
 
 export const keys: { key: string; description: string }[] = [
-  { key: "1..6", description: "switch view" },
-  { key: "arrows", description: "move, and change view sideways" },
+  { key: "1..7", description: "switch view" },
+  { key: "arrows", description: "move, and change view or section sideways" },
   { key: "/", description: "filter as you type" },
   { key: "space", description: "select for a batch action" },
   { key: "l", description: "logs, beside the list" },
   { key: "e", description: "shell inside the container" },
   { key: "ctrl+w", description: "move between the list and the panel" },
   { key: "x", description: "the action palette, for everything rarer" },
+  { key: ",", description: "choose which tabs are shown" },
   { key: "?", description: "every binding, generated from the source" },
 ];

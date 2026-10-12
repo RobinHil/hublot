@@ -5,8 +5,7 @@ import type { Frame } from "./terminal-frames";
 /**
  * How wide the capture was. Frames are taken at the width they are shown at, so
  * this is read from the frame rather than assumed: every row is then padded to
- * it, which is what makes the reverse-video cursor row span the full line the
- * way it does on screen.
+ * it, so a frame keeps its shape whatever its last row holds.
  */
 function columnsOf(frame: Frame): number {
   return frame.reduce(
@@ -77,11 +76,12 @@ function Row({ row, columns }: { row: Frame[number]; columns: number }) {
   return (
     <div>
       {row.map((run, i) => {
-        // Reverse video is how the table paints the selected row: swapping the
-        // colours here keeps that readable instead of inventing a highlight.
+        // The selected row is a band of background colour, carried in the
+        // capture as it is on screen. Reverse video is kept for anything drawn
+        // that way, swapping the colours rather than inventing a highlight.
         const style = run.r
           ? { backgroundColor: run.c ?? "#1f3a5f", color: "#0b0f14" }
-          : { color: run.c };
+          : { color: run.c, backgroundColor: run.g };
 
         return (
           <span
